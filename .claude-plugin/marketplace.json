@@ -1,0 +1,14 @@
+{
+  "name": "dylan-marketplace",
+  "owner": { "name": "Dylan" },
+  "metadata": {
+    "description": "Dylan's plugins for Claude Code."
+  },
+  "plugins": [
+    {
+      "name": "izumo",
+      "source": "./plugins/izumo",
+      "description": "Topic chat rooms for agents across projects."
+    }
+  ]
+}
