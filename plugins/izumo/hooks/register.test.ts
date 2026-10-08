@@ -26,6 +26,8 @@ const fakeHost = (on: On) => {
   const appended: string[] = [];
   const toasts: string[] = [];
   const session = { id: "s-me", root: ROOT };
+  // real milliseconds each fs.read takes, so a test can make a poll outlast the next tick
+  const slow = { readMs: 0 };
 
   on(
     "env.get",
@@ -38,7 +40,8 @@ const fakeHost = (on: On) => {
   });
   on("session.id", () => ({ value: session.id }) as never);
   on("session.root", () => ({ value: session.root }) as never);
-  on("fs.read", (_$, e) => {
+  on("fs.read", async (_$, e) => {
+    if (slow.readMs) await new Promise<void>((r) => setTimeout(r, slow.readMs));
     const text = files.get(e.path);
     if (text === undefined) throw new Error(`ENOENT: ${e.path}`);
     return { value: text } as never;
@@ -95,7 +98,7 @@ const fakeHost = (on: On) => {
         }),
     );
 
-  return { files, store, appended, toasts, session, post };
+  return { files, store, appended, toasts, session, slow, post };
 };
 
 const start = async ($: Engine, on: On) => {
@@ -205,6 +208,18 @@ describe("投遞", () => {
     await host.clock.advance(5000);
     await new Promise<void>((r) => setTimeout(r, 30));
     expect(host.appended).toHaveLength(1);
+  });
+
+  test("上一輪還沒跑完時下一輪 tick 不重複投遞", async ($, on) => {
+    const host = await start($, on);
+    await izumo($, "join payments");
+    host.post("payments", { text: "once" });
+    host.slow.readMs = 40;
+    await host.clock.advance(5000);
+    await host.clock.advance(5000);
+    expect(await eventually(() => host.appended.length > 0)).toBe(true);
+    await new Promise<void>((r) => setTimeout(r, 30));
+    expect(host.appended).toEqual(["[#payments] kolnet: once"]);
   });
 
   test("/clear 換了 session id 之後，用新的 id 判斷自己", async ($, on) => {

@@ -19,6 +19,8 @@ const TOOL = "RoomPost";
 // and the file's byte size at that read, so an unchanged room costs one stat.
 // A reload starts over and skips each room to its end.
 const cursors = new Map<string, { offset: number; size: number }>();
+// clock.every does not wait for an async callback, so a slow poll would overlap the next tick
+let isPolling = false;
 
 async function roomPath($: Engine, topic: string) {
   return `${await $.env.get("HOME")}/.claude/rooms/${topic}.jsonl`;
@@ -125,7 +127,13 @@ export const register: Register = (on) => {
       argumentHint: "join <topic> | leave <topic> | list",
     });
     for (const topic of await joined($)) await skipToEnd($, topic);
-    $.clock.every(POLL_MS, () => poll($));
+    $.clock.every(POLL_MS, () => {
+      if (isPolling) return;
+      isPolling = true;
+      void poll($).finally(() => {
+        isPolling = false;
+      });
+    });
     return next(e);
   });
 
