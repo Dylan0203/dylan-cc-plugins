@@ -29,10 +29,27 @@ const fakeHost = (on: On) => {
   // real milliseconds each fs.read takes, so a test can make a poll outlast the next tick
   const slow = { readMs: 0 };
 
-  on(
-    "env.get",
-    (_$, e) => ({ value: e.name === "HOME" ? HOME : undefined }) as never,
-  );
+  const env: Record<string, string> = { HOME };
+  // what Jev answers: each request's parsed body in, the answers map out (undefined = HTTP 500)
+  const jev = {
+    calls: [] as { questions: Record<string, { instructions: string }> }[],
+    answer: (_body: unknown): Record<string, { type: string; noul: number }> | undefined => ({}),
+  };
+
+  on("env.get", (_$, e) => ({ value: env[e.name] }) as never);
+  on("http.fetch", (_$, e) => {
+    const body = JSON.parse(String(e.init?.body));
+    jev.calls.push(body);
+    const answers = jev.answer(body);
+    return {
+      value: {
+        status: answers ? 200 : 500,
+        ok: answers !== undefined,
+        headers: {},
+        text: JSON.stringify({ answers }),
+      },
+    } as never;
+  });
   on("session.id", () => ({ value: session.id }) as never);
   on("session.root", () => ({ value: session.root }) as never);
   on("fs.list", (_$, e) => {
@@ -126,6 +143,8 @@ const fakeHost = (on: On) => {
     state,
     seedRoom,
     say,
+    env,
+    jev,
   };
 };
 
@@ -259,6 +278,78 @@ describe("RoomPost", () => {
     expect(host.events("payments").some((e) => e.type === "message")).toBe(
       false,
     );
+  });
+});
+
+describe("RoomPost 與 Jev", () => {
+  const noul = (p: number) => ({ type: "noul", noul: p });
+  const withAsk = (host: ReturnType<typeof fakeHost>) => {
+    host.seedRoom("payments");
+    host.say("payments", "要用哪個幣別？", { id: "q1", kind: "ask" });
+    host.env.TYPESAFE_API_KEY = "k";
+  };
+
+  test("自然語言回答了 open ask，Jev 判斷超過門檻就寫入 resolve", async ($, on) => {
+    const host = await start($, on);
+    withAsk(host);
+    host.jev.answer = () => ({ answers_0: noul(0.92), isAsk: noul(0.1) });
+    await boot($);
+    const result = await tool($, "RoomPost", { room: "payments", text: "用 TWD" });
+
+    expect(host.jev.calls).toHaveLength(1);
+    expect(Object.keys(host.jev.calls[0]!.questions)).toEqual(["answers_0", "isAsk"]);
+    expect(host.events("payments").at(-1)).toEqual(
+      expect.objectContaining({ type: "resolve", ask: "q1", p: 0.92 }),
+    );
+    expect(host.state("payments").openAsks).toEqual([]);
+    expect(String(result.result)).toMatch(/Jev closed ask q1 \(p=0\.92\)/);
+  });
+
+  test("沒標 kind 但 Jev 判斷是 ask，就寫入 ask-flag", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.env.TYPESAFE_API_KEY = "k";
+    host.jev.answer = () => ({ isAsk: noul(0.88) });
+    await boot($);
+    const result = await tool($, "RoomPost", { room: "payments", text: "staging 可以重開嗎？" });
+    const open = host.state("payments").openAsks;
+    expect(open).toHaveLength(1);
+    expect(open[0]?.text).toBe("staging 可以重開嗎？");
+    expect(String(result.result)).toMatch(/Jev marked it as an ask/);
+  });
+
+  test("低於門檻什麼都不寫", async ($, on) => {
+    const host = await start($, on);
+    withAsk(host);
+    host.jev.answer = () => ({ answers_0: noul(0.5), isAsk: noul(0.5) });
+    await boot($);
+    await tool($, "RoomPost", { room: "payments", text: "我晚點看" });
+    expect(host.events("payments").at(-1)?.type).toBe("message");
+    expect(host.state("payments").openAsks.map((m) => m.id)).toEqual(["q1"]);
+  });
+
+  test("已經填了 answers 就不問 Jev", async ($, on) => {
+    const host = await start($, on);
+    withAsk(host);
+    await boot($);
+    await tool($, "RoomPost", { room: "payments", text: "用 TWD", answers: "q1" });
+    expect(host.jev.calls).toHaveLength(0);
+    expect(host.state("payments").openAsks).toEqual([]);
+  });
+
+  test("沒有 key 不打 API；Jev 失敗也照樣發出", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    await boot($);
+    expect((await tool($, "RoomPost", { room: "payments", text: "a" })).isError).not.toBe(true);
+    expect(host.jev.calls).toHaveLength(0);
+
+    host.env.TYPESAFE_API_KEY = "k";
+    host.jev.answer = () => undefined;
+    const result = await tool($, "RoomPost", { room: "payments", text: "b" });
+    expect(result.isError).not.toBe(true);
+    expect(String(result.result)).toMatch(/Posted/);
+    expect(host.events("payments").filter((e) => e.type === "message")).toHaveLength(2);
   });
 });
 

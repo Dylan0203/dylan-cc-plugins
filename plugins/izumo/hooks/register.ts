@@ -16,8 +16,12 @@ import {
   type RoomEvent,
   type RoomState,
 } from "./rooms";
+import { askJev, buildQuestions, jevVerdicts } from "./jev";
 
 const POLL_MS = 5000;
+const JEV_TIMEOUT_MS = 3000;
+// provisional; tune once real rooms show how Jev scores answers and asks
+const JEV_THRESHOLD = 0.8;
 
 type Room = { room: string; state: RoomState };
 type Answer = { result: string; isError?: true };
@@ -286,11 +290,43 @@ async function roomInvite($: Engine, input: ToolInput): Promise<Answer> {
   };
 }
 
+// Runs only in the poster's session, so each message is judged once rather than once per member.
+// Never throws: the message is already written, so a failure here must not read as "not posted".
+async function jevCheck($: Engine, room: string, state: RoomState, message: MessageEvent) {
+  try {
+    const asks = message.answers === undefined ? state.openAsks : [];
+    const needsKind = message.kind === undefined && message.answers === undefined;
+    const request = buildQuestions(message, asks, needsKind);
+    const result = await askJev(request, {
+      apiKey: await $.env.get("TYPESAFE_API_KEY"),
+      fetch: (url, init) => $.http.fetch(url, init),
+      timeout: () => $.clock.sleep(JEV_TIMEOUT_MS),
+    });
+    if ("skipped" in result) {
+      const isQuiet = result.skipped === "TYPESAFE_API_KEY not set" || result.skipped === "nothing to ask";
+      return isQuiet ? "" : ` Jev check skipped: ${result.skipped}.`;
+    }
+    const verdicts = jevVerdicts(result.answers, asks, JEV_THRESHOLD);
+    const notes: string[] = [];
+    for (const { ask, p } of verdicts.resolved) {
+      await write($, room, { type: "resolve", ask, p, ...(await stamp($)) });
+      notes.push(` Jev closed ask ${ask} (p=${p}).`);
+    }
+    if (verdicts.isAsk !== undefined) {
+      await write($, room, { type: "ask-flag", id: message.id, ...(await stamp($)) });
+      notes.push(` Jev marked it as an ask (${message.id}, p=${verdicts.isAsk}); set kind: "ask" yourself next time.`);
+    }
+    return notes.join("");
+  } catch (err) {
+    return ` Jev check failed: ${err instanceof Error ? err.message : String(err)}.`;
+  }
+}
+
 async function roomPost($: Engine, input: ToolInput): Promise<Answer> {
   const found = await memberRoom($, input.room);
   if ("error" in found) return { result: found.error!, isError: true };
   const at = await stamp($);
-  await write($, found.room, {
+  const message: MessageEvent = {
     type: "message",
     id: newId(at.ts),
     text: input.text ?? "",
@@ -298,10 +334,11 @@ async function roomPost($: Engine, input: ToolInput): Promise<Answer> {
     ...(input.kind === "ask" ? { kind: "ask" as const } : {}),
     ...(input.answers ? { answers: input.answers } : {}),
     ...at,
-  });
-  return {
-    result: `Posted to #${found.room}${input.kind === "ask" ? ` as ask ${newId(at.ts)}` : ""}.`,
   };
+  await write($, found.room, message);
+  const asAsk = message.kind === "ask" ? ` as ask ${message.id}` : "";
+  const jev = await jevCheck($, found.room, found.state, message);
+  return { result: `Posted to #${found.room}${asAsk}.${jev}` };
 }
 
 async function roomClose($: Engine, input: ToolInput): Promise<Answer> {
