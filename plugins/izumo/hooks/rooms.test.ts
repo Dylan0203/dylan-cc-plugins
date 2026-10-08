@@ -3,111 +3,247 @@ import { describe, expect, test } from "claude-code/testing";
 import {
   catchUpText,
   composeText,
+  foldRoom,
   formatMessage,
-  isTopic,
+  isRoomName,
+  newId,
   parseCommand,
   projectName,
   readSince,
-  recent,
   toLine,
-  type RoomMessage,
+  type MessageEvent,
+  type RoomEvent,
 } from "./rooms";
 
-const msg = (over: Partial<RoomMessage> = {}): RoomMessage => ({
-  ts: 1,
-  project: "skid",
-  session: "s-1",
+const DAY = 24 * 60 * 60 * 1000;
+const NOW = 100 * DAY;
+
+const base = (project: string, ts = NOW) => ({
+  ts,
+  project,
+  session: `s-${project}`,
+});
+const create = (
+  project: string,
+  purpose = "coordinate payments",
+): RoomEvent => ({
+  type: "create",
+  purpose,
+  ...base(project),
+});
+const join = (project: string): RoomEvent => ({
+  type: "join",
+  ...base(project),
+});
+const leave = (project: string): RoomEvent => ({
+  type: "leave",
+  ...base(project),
+});
+const invite = (project: string, invitee: string): RoomEvent => ({
+  type: "invite",
+  invitee,
+  ...base(project),
+});
+const message = (over: Partial<MessageEvent> = {}): MessageEvent => ({
+  type: "message",
+  id: "m1",
   text: "hello",
+  ...base("kolnet"),
   ...over,
 });
 
-describe("isTopic", () => {
+describe("isRoomName", () => {
   test("接受小寫英數與連字號", () => {
-    expect(isTopic("payments")).toBe(true);
-    expect(isTopic("ecpay-v2")).toBe(true);
+    expect(isRoomName("payments")).toBe(true);
+    expect(isRoomName("odd-patchflow")).toBe(true);
   });
 
-  test("拒絕會變成奇怪檔名的 topic", () => {
-    expect(isTopic("")).toBe(false);
-    expect(isTopic("../etc")).toBe(false);
-    expect(isTopic("Pay")).toBe(false);
-    expect(isTopic("-x")).toBe(false);
-    expect(isTopic("a".repeat(41))).toBe(false);
+  test("拒絕會變成奇怪檔名的名字", () => {
+    expect(isRoomName("")).toBe(false);
+    expect(isRoomName("../etc")).toBe(false);
+    expect(isRoomName("Pay")).toBe(false);
+    expect(isRoomName("-x")).toBe(false);
+    expect(isRoomName("a".repeat(41))).toBe(false);
   });
 });
 
 describe("parseCommand", () => {
-  test("join / leave 帶 topic，去掉開頭的 #", () => {
+  test("join / leave / close 帶 room，去掉開頭的 #", () => {
     expect(parseCommand("join payments")).toEqual({
       kind: "join",
-      topic: "payments",
+      room: "payments",
     });
     expect(parseCommand("  leave   #payments ")).toEqual({
       kind: "leave",
-      topic: "payments",
+      room: "payments",
+    });
+    expect(parseCommand("close payments")).toEqual({
+      kind: "close",
+      room: "payments",
     });
   });
 
-  test("空字串與 list 都是 list", () => {
-    expect(parseCommand("")).toEqual({ kind: "list" });
-    expect(parseCommand("list")).toEqual({ kind: "list" });
+  test("空字串與 list 列出已加入的，list --all 列出全部", () => {
+    expect(parseCommand("")).toEqual({ kind: "list", isAll: false });
+    expect(parseCommand("list")).toEqual({ kind: "list", isAll: false });
+    expect(parseCommand("list --all")).toEqual({ kind: "list", isAll: true });
   });
 
   test("壞掉的輸入回傳用法說明", () => {
     expect(parseCommand("join").kind).toBe("error");
-    expect(parseCommand("join Bad/Topic").kind).toBe("error");
+    expect(parseCommand("join Bad/Room").kind).toBe("error");
     expect(parseCommand("dance").kind).toBe("error");
   });
 });
 
 describe("readSince", () => {
-  test("只回傳 offset 之後完整的行，並推進 offset", () => {
-    const a = toLine(msg({ text: "one" }));
-    const b = toLine(msg({ text: "two" }));
+  test("只回傳 offset 之後完整的事件，並推進 offset", () => {
+    const a = toLine(message({ text: "one" }));
+    const b = toLine(join("skid"));
     const first = readSince(a + b, 0);
-    expect(first.messages.map((m) => m.text)).toEqual(["one", "two"]);
+    expect(first.events.map((e) => e.type)).toEqual(["message", "join"]);
     expect(first.offset).toBe((a + b).length);
 
-    const c = toLine(msg({ text: "three" }));
-    const second = readSince(a + b + c, first.offset);
-    expect(second.messages.map((m) => m.text)).toEqual(["three"]);
+    const c = toLine(message({ text: "three" }));
+    expect(readSince(a + b + c, first.offset).events).toHaveLength(1);
   });
 
   test("寫到一半的最後一行留到下次", () => {
-    const a = toLine(msg({ text: "one" }));
-    const partial = '{"ts":2,"proj';
-    const result = readSince(a + partial, 0);
-    expect(result.messages).toHaveLength(1);
+    const a = toLine(message());
+    const result = readSince(a + '{"type":"mess', 0);
+    expect(result.events).toHaveLength(1);
     expect(result.offset).toBe(a.length);
   });
 
-  test("跳過壞掉的行", () => {
-    const text = "not json\n" + toLine(msg({ text: "ok" })) + '{"ts":"x"}\n';
-    expect(readSince(text, 0).messages.map((m) => m.text)).toEqual(["ok"]);
+  test("跳過壞掉或不認得的行", () => {
+    const text =
+      "not json\n" +
+      toLine(message({ text: "ok" })) +
+      '{"type":"dance","ts":1}\n' +
+      '{"type":"message"}\n';
+    expect(readSince(text, 0).events).toHaveLength(1);
   });
 
   test("檔案變短（被清掉）就從頭讀", () => {
-    const a = toLine(msg({ text: "fresh" }));
-    expect(readSince(a, 9999).messages.map((m) => m.text)).toEqual(["fresh"]);
+    expect(readSince(toLine(message()), 9999).events).toHaveLength(1);
   });
 });
 
 test("toLine 是一行 JSON，訊息裡的換行也不會斷行", () => {
-  const line = toLine(msg({ text: "a\nb" }));
+  const line = toLine(message({ text: "a\nb" }));
   expect(line.endsWith("\n")).toBe(true);
   expect(line.slice(0, -1).includes("\n")).toBe(false);
-  expect(JSON.parse(line)).toEqual(msg({ text: "a\nb" }));
 });
 
-test("recent 取最後 n 則", () => {
-  const text = [1, 2, 3].map((n) => toLine(msg({ ts: n }))).join("");
-  expect(recent(text, 2).map((m) => m.ts)).toEqual([2, 3]);
+test("newId 用時間戳的 36 進位", () => {
+  expect(newId(1791430885641)).toBe((1791430885641).toString(36));
 });
 
-test("formatMessage 標出 room 與發言專案", () => {
-  expect(
-    formatMessage("payments", msg({ project: "kolnet", text: "API 改好了" })),
-  ).toBe("[#payments] kolnet: API 改好了");
+describe("foldRoom", () => {
+  test("create 決定 owner 與 purpose，join / leave 決定成員", () => {
+    const state = foldRoom([
+      create("odd-patchflow"),
+      join("odd-patchflow"),
+      join("skid"),
+      leave("skid"),
+    ]);
+    expect(state.owner).toBe("odd-patchflow");
+    expect(state.purpose).toBe("coordinate payments");
+    expect(state.members).toEqual(["odd-patchflow"]);
+    expect(state.isClosed).toBe(false);
+  });
+
+  test("邀請在對方加入前是 pending，離開也會撤掉 pending，重邀又回來", () => {
+    expect(
+      foldRoom([create("a"), join("a"), invite("a", "skid")]).pendingInvites,
+    ).toEqual(["skid"]);
+    expect(
+      foldRoom([create("a"), invite("a", "skid"), join("skid")]).pendingInvites,
+    ).toEqual([]);
+    expect(
+      foldRoom([create("a"), invite("a", "skid"), leave("skid")])
+        .pendingInvites,
+    ).toEqual([]);
+    expect(
+      foldRoom([
+        create("a"),
+        invite("a", "skid"),
+        leave("skid"),
+        invite("a", "skid"),
+      ]).pendingInvites,
+    ).toEqual(["skid"]);
+  });
+
+  test("重複的 join 不會重複成員", () => {
+    expect(foldRoom([join("skid"), join("skid")]).members).toEqual(["skid"]);
+  });
+
+  test("close 之後 isClosed", () => {
+    expect(
+      foldRoom([create("a"), { type: "close", ...base("a") }]).isClosed,
+    ).toBe(true);
+  });
+
+  test("ask 在被 answers 或 resolve 之前都是 open", () => {
+    const ask = message({ id: "q1", kind: "ask", text: "which currency?" });
+    expect(foldRoom([ask]).openAsks.map((m) => m.id)).toEqual(["q1"]);
+    expect(
+      foldRoom([ask, message({ id: "r1", answers: "q1" })]).openAsks,
+    ).toEqual([]);
+    expect(
+      foldRoom([ask, { type: "resolve", ask: "q1", p: 0.9, ...base("kolnet") }])
+        .openAsks,
+    ).toEqual([]);
+  });
+
+  test("ask-flag 把沒標 kind 的訊息變成 ask", () => {
+    const state = foldRoom([
+      message({ id: "q2" }),
+      { type: "ask-flag", id: "q2", ...base("kolnet") },
+    ]);
+    expect(state.openAsks.map((m) => m.id)).toEqual(["q2"]);
+    expect(state.openAsks[0]?.kind).toBe("ask");
+  });
+
+  test("lastTs 是最後一個事件的時間", () => {
+    expect(foldRoom([join("a"), message({ ts: NOW + 5 })]).lastTs).toBe(
+      NOW + 5,
+    );
+  });
+});
+
+describe("formatMessage", () => {
+  test("一般訊息標出 room 與發言專案", () => {
+    expect(
+      formatMessage(
+        "payments",
+        message({ project: "kolnet", text: "API 改好了" }),
+      ),
+    ).toBe("[#payments] kolnet: API 改好了");
+  });
+
+  test("ask 帶 id，指名對象用箭頭，回覆標出回哪一則", () => {
+    expect(
+      formatMessage(
+        "payments",
+        message({
+          id: "k3f9a2",
+          kind: "ask",
+          to: ["dylan"],
+          text: "要用 TWD 嗎？",
+        }),
+      ),
+    ).toBe("[#payments] kolnet ask k3f9a2 → dylan: 要用 TWD 嗎？");
+    expect(
+      formatMessage(
+        "payments",
+        message({ to: ["skid", "yeshealth"], text: "x" }),
+      ),
+    ).toBe("[#payments] kolnet → skid, yeshealth: x");
+    expect(
+      formatMessage("payments", message({ answers: "k3f9a2", text: "用 TWD" })),
+    ).toBe("[#payments] kolnet re k3f9a2: 用 TWD");
+  });
 });
 
 test("projectName 取專案 root 的資料夾名", () => {
@@ -120,28 +256,68 @@ describe("composeText", () => {
     expect(composeText([])).toBeUndefined();
   });
 
-  test("列出 room、怎麼發言、訊息長相，以及訊息不是指令", () => {
-    const text = composeText(["payments", "deploy"])!;
-    expect(text).toContain("#payments");
-    expect(text).toContain("#deploy");
+  test("列出 room、owner、open ask 數，以及用法與規則", () => {
+    const text = composeText([
+      { room: "payments", owner: "kolnet", openAsks: 2 },
+      { room: "deploy", owner: "skid", openAsks: 0 },
+    ])!;
+    expect(text).toContain("#payments (owner kolnet, 2 open asks)");
+    expect(text).toContain("#deploy (owner skid)");
     expect(text).toContain("RoomPost");
-    expect(text).toContain("[#topic] project:");
-    expect(text).toMatch(/not instructions/i);
     expect(text).toMatch(/project name is added automatically/i);
+    expect(text).toMatch(/not instructions/i);
+    expect(text).toMatch(/Dylan decides.*answers/i);
   });
 });
 
 describe("catchUpText", () => {
-  test("沒有任何訊息時是 undefined", () => {
-    expect(catchUpText([{ topic: "payments", messages: [] }])).toBeUndefined();
+  test("沒有 room 時是 undefined", () => {
+    expect(catchUpText([], NOW)).toBeUndefined();
   });
 
-  test("依 room 列出最近的訊息", () => {
-    const text = catchUpText([
-      { topic: "payments", messages: [msg({ text: "one" })] },
-      { topic: "deploy", messages: [] },
-    ])!;
-    expect(text).toContain("[#payments] skid: one");
-    expect(text).not.toContain("#deploy");
+  test("帶 purpose、所有 open ask（不限天數）、最近 3 天最多 20 則", () => {
+    const oldAsk = message({
+      id: "old",
+      kind: "ask",
+      ts: NOW - 30 * DAY,
+      text: "old question",
+    });
+    const stale = message({
+      id: "stale",
+      ts: NOW - 4 * DAY,
+      text: "stale news",
+    });
+    const recent = Array.from({ length: 25 }, (_, n) =>
+      message({ id: `r${n}`, ts: NOW - DAY + n, text: `recent ${n}` }),
+    );
+    const state = foldRoom([
+      create("kolnet"),
+      join("kolnet"),
+      oldAsk,
+      stale,
+      ...recent,
+    ]);
+    const text = catchUpText([{ room: "payments", state }], NOW)!;
+
+    expect(text).toContain("#payments (owner kolnet): coordinate payments");
+    expect(text).toContain("old question");
+    expect(text).not.toContain("stale news");
+    expect(text).toContain("recent 24");
+    expect(text).toContain("recent 5");
+    expect(text).not.toContain("recent 4\n");
+  });
+
+  test("open ask 已經列出就不在最近訊息裡重複", () => {
+    const ask = message({
+      id: "q",
+      kind: "ask",
+      ts: NOW - 1,
+      text: "only once",
+    });
+    const text = catchUpText(
+      [{ room: "payments", state: foldRoom([create("kolnet"), ask]) }],
+      NOW,
+    )!;
+    expect(text.split("only once")).toHaveLength(2);
   });
 });

@@ -3,130 +3,428 @@ import type { EngineInterface as Engine, Register } from "claude-code";
 import {
   catchUpText,
   composeText,
+  foldRoom,
   formatMessage,
+  isRoomName,
+  newId,
   parseCommand,
+  parseEvents,
   projectName,
   readSince,
-  recent,
   toLine,
+  type MessageEvent,
+  type RoomEvent,
+  type RoomState,
 } from "./rooms";
 
 const POLL_MS = 5000;
-const CATCH_UP = 20;
-const TOOL = "RoomPost";
 
-// How far this process has read each room: the text offset readSince continues from,
-// and the file's byte size at that read, so an unchanged room costs one stat.
-// A reload starts over and skips each room to its end.
+type Room = { room: string; state: RoomState };
+type Answer = { result: string; isError?: true };
+
+// How far this process has delivered each room file: the text offset readSince continues
+// from, and the file's size at that read, so an unchanged room costs nothing past the listing.
+// Tools and prompts fold rooms fresh from disk; only delivery needs a cursor.
 const cursors = new Map<string, { offset: number; size: number }>();
 // clock.every does not wait for an async callback, so a slow poll would overlap the next tick
 let isPolling = false;
 
-async function roomPath($: Engine, topic: string) {
-  return `${await $.env.get("HOME")}/.claude/rooms/${topic}.jsonl`;
+async function roomsDir($: Engine) {
+  return `${await $.env.get("HOME")}/.claude/rooms`;
 }
 
-async function readRoom($: Engine, topic: string) {
-  return $.fs.read(await roomPath($, topic)).catch(() => "");
+async function readRoom($: Engine, room: string) {
+  return $.fs.read(`${await roomsDir($)}/${room}.jsonl`).catch(() => undefined);
 }
 
-async function roomSize($: Engine, topic: string) {
-  return $.fs.stat(await roomPath($, topic)).then(
-    (s) => s.size,
-    () => 0,
-  );
+async function loadRoom(
+  $: Engine,
+  room: string,
+): Promise<RoomState | undefined> {
+  const text = await readRoom($, room);
+  return text === undefined ? undefined : foldRoom(parseEvents(text));
 }
 
-async function membersKey($: Engine) {
-  return `rooms:${await $.session.root()}`;
+async function listRoomFiles($: Engine) {
+  const entries = await $.fs.list(await roomsDir($)).catch(() => []);
+  return entries
+    .filter((e) => e.kind === "file" && e.name.endsWith(".jsonl"))
+    .map((e) => ({ room: e.name.slice(0, -".jsonl".length), size: e.size }));
 }
 
-async function joined($: Engine): Promise<string[]> {
-  return (
-    ((await $.store.get(await membersKey($))) as string[] | undefined) ?? []
-  );
-}
-
-async function setJoined($: Engine, topics: string[]) {
-  await $.store.set(await membersKey($), topics);
-}
-
-// Start a room at its current end, so joining never replays history into the chat.
-async function skipToEnd($: Engine, topic: string) {
-  const size = await roomSize($, topic);
-  cursors.set(topic, { offset: (await readRoom($, topic)).length, size });
-}
-
-async function poll($: Engine) {
-  const me = await $.session.id();
-  for (const topic of await joined($)) {
-    const cursor = cursors.get(topic);
-    // joined by another session of this project since this one started
-    if (cursor === undefined) {
-      await skipToEnd($, topic);
-      continue;
-    }
-    const size = await roomSize($, topic);
-    if (size === cursor.size) continue;
-
-    const read = readSince(await readRoom($, topic), cursor.offset);
-    cursors.set(topic, { offset: read.offset, size });
-    const fresh = read.messages.filter((m) => m.session !== me);
-    for (const m of fresh)
-      await $.session.append({
-        message: {
-          type: "user",
-          content: [{ type: "text", text: formatMessage(topic, m) }],
-        },
-      });
-    if (fresh.length > 0) $.ui.toast(`izumo: ${fresh.length} new in #${topic}`);
+async function allRooms($: Engine): Promise<Room[]> {
+  const rooms: Room[] = [];
+  for (const { room } of await listRoomFiles($)) {
+    const state = await loadRoom($, room);
+    if (state) rooms.push({ room, state });
   }
+  return rooms;
 }
 
-async function post($: Engine, topic: string, text: string) {
-  const line = toLine({
-    ts: await $.clock.now(),
-    project: projectName(await $.session.root()),
-    session: await $.session.id(),
-    text,
-  });
-  const path = await roomPath($, topic);
-  await $.process.run(["mkdir", "-p", path.slice(0, path.lastIndexOf("/"))]);
-  // O_APPEND through the shell so two sessions posting at once never overwrite each other;
-  // the message goes in on stdin, never through shell parsing
+async function me($: Engine) {
+  return projectName(await $.session.root());
+}
+
+const isMember = (state: RoomState, project: string) =>
+  state.members.includes(project) && !state.isClosed;
+
+async function myRooms($: Engine): Promise<Room[]> {
+  const project = await me($);
+  return (await allRooms($)).filter(({ state }) => isMember(state, project));
+}
+
+async function write($: Engine, room: string, event: RoomEvent) {
+  const dir = await roomsDir($);
+  const path = `${dir}/${room}.jsonl`;
+  await $.process.run(["mkdir", "-p", dir]);
+  // O_APPEND through the shell so two sessions writing at once never overwrite each other;
+  // the event goes in on stdin, never through shell parsing
   const { exitCode, stderr } = await $.process.run(
     ["sh", "-c", 'cat >> "$1"', "sh", path],
     {
-      stdin: line,
+      stdin: toLine(event),
     },
   );
   if (exitCode !== 0) throw new Error(`append to ${path} failed: ${stderr}`);
 }
 
+async function stamp($: Engine) {
+  return {
+    ts: await $.clock.now(),
+    project: await me($),
+    session: await $.session.id(),
+  };
+}
+
+async function say($: Engine, text: string) {
+  await $.session.append({
+    message: { type: "user", content: [{ type: "text", text }] },
+  });
+}
+
+// Join every room that invited this project. Delivery is for invites a poll notices later:
+// at startup the first prompt's catch-up already carries those rooms.
+async function acceptInvites(
+  $: Engine,
+  rooms: readonly Room[],
+  isLive: boolean,
+) {
+  const project = await me($);
+  for (const { room, state } of rooms) {
+    if (state.isClosed || !state.pendingInvites.includes(project)) continue;
+    await write($, room, { type: "join", ...(await stamp($)) });
+    $.ui.toast(
+      `izumo: joined #${room} (invited by ${state.owner ?? "someone"})`,
+    );
+    if (!isLive) continue;
+    const joined = (await loadRoom($, room)) ?? state;
+    const catchUp = catchUpText([{ room, state: joined }], await $.clock.now());
+    await say(
+      $,
+      `You were invited to izumo room #${room} by ${state.owner ?? "someone"}.\n${catchUp ?? ""}`,
+    );
+  }
+}
+
+function toastFor(
+  room: string,
+  project: string,
+  fresh: readonly MessageEvent[],
+) {
+  const addressed = fresh
+    .filter((m) => m.to?.includes(project))
+    .map((m) => `${m.project} → you`);
+  const forDylan = fresh.some(
+    (m) => m.kind === "ask" && m.to?.includes("dylan"),
+  )
+    ? ["ask for Dylan"]
+    : [];
+  const notes = [...new Set([...addressed, ...forDylan])];
+  return `izumo #${room}: ${fresh.length} new${notes.length ? ` (${notes.join(", ")})` : ""}`;
+}
+
+async function poll($: Engine) {
+  const project = await me($);
+  const mine = await $.session.id();
+  const changed: Room[] = [];
+  for (const { room, size } of await listRoomFiles($)) {
+    // a room created after this session started is read from its start
+    const cursor = cursors.get(room) ?? { offset: 0, size: -1 };
+    if (size === cursor.size) continue;
+    const text = await readRoom($, room);
+    if (text === undefined) continue;
+    const read = readSince(text, cursor.offset);
+    cursors.set(room, { offset: read.offset, size });
+    const state = foldRoom(parseEvents(text));
+    changed.push({ room, state });
+    if (!state.members.includes(project)) continue;
+
+    const fresh = read.events.filter(
+      (e): e is MessageEvent => e.type === "message" && e.session !== mine,
+    );
+    for (const m of fresh) await say($, formatMessage(room, m));
+    if (fresh.length > 0) $.ui.toast(toastFor(room, project, fresh));
+    const closed = read.events.find((e) => e.type === "close");
+    if (closed)
+      await say($, `[#${room}] #${room} was closed by ${closed.project}.`);
+  }
+  await acceptInvites($, changed, true);
+}
+
+async function skipToEnd($: Engine) {
+  for (const { room, size } of await listRoomFiles($))
+    cursors.set(room, { offset: (await readRoom($, room))?.length ?? 0, size });
+}
+
+const ago = (ms: number) => {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.floor(minutes / (24 * 60))}d`;
+};
+
+async function listText($: Engine, isAll: boolean) {
+  const project = await me($);
+  const now = await $.clock.now();
+  const rooms = (await allRooms($)).filter(
+    ({ state }) => isAll || isMember(state, project),
+  );
+  if (rooms.length === 0)
+    return isAll
+      ? "No izumo rooms yet."
+      : "Not in any izumo room. /izumo list --all";
+  return rooms
+    .map(({ room, state }) => {
+      const asks = state.openAsks;
+      const oldest = asks.length
+        ? `, oldest ${ago(now - Math.min(...asks.map((m) => m.ts)))}`
+        : "";
+      return [
+        `#${room}${state.isClosed ? " (closed)" : ""} · owner ${state.owner ?? "unknown"} · ${state.members.join(", ") || "no members"}`,
+        `  last activity ${ago(now - state.lastTs)} ago · ${asks.length} open ask${asks.length === 1 ? "" : "s"}${oldest}`,
+      ].join("\n");
+    })
+    .join("\n");
+}
+
+type ToolInput = {
+  room?: string;
+  purpose?: string;
+  invite?: string[];
+  projects?: string[];
+  text?: string;
+  to?: string[];
+  kind?: "ask";
+  answers?: string;
+};
+
+async function invite(
+  $: Engine,
+  room: string,
+  state: RoomState,
+  projects: readonly string[],
+) {
+  const invited = projects.filter((p) => !state.members.includes(p));
+  for (const invitee of invited)
+    await write($, room, { type: "invite", invitee, ...(await stamp($)) });
+  return invited;
+}
+
+async function roomCreate($: Engine, input: ToolInput): Promise<Answer> {
+  const room = input.room ?? (await me($));
+  if (!isRoomName(room))
+    return {
+      result: `Invalid room "${room}": use a-z, 0-9 and -.`,
+      isError: true,
+    };
+  const existing = await loadRoom($, room);
+  if (existing?.isClosed)
+    return {
+      result: `#${room} exists and is closed. Pick another name.`,
+      isError: true,
+    };
+  if (existing)
+    return {
+      result: `#${room} is already open (owner ${existing.owner ?? "unknown"}, members ${existing.members.join(", ")}). Use RoomInvite to add projects.`,
+    };
+  await write($, room, {
+    type: "create",
+    purpose: input.purpose ?? "",
+    ...(await stamp($)),
+  });
+  await write($, room, { type: "join", ...(await stamp($)) });
+  const invited = await invite($, room, foldRoom([]), input.invite ?? []);
+  return {
+    result: `Created #${room}${invited.length ? `, invited ${invited.join(", ")}` : ""}.`,
+  };
+}
+
+async function memberRoom($: Engine, room: string | undefined) {
+  if (room === undefined || !isRoomName(room))
+    return { error: `Invalid room "${room}".` };
+  const state = await loadRoom($, room);
+  if (state === undefined) return { error: `No room #${room}.` };
+  if (state.isClosed) return { error: `#${room} is closed.` };
+  if (!state.members.includes(await me($)))
+    return { error: `Not a member of #${room}.` };
+  return { room, state };
+}
+
+async function roomInvite($: Engine, input: ToolInput): Promise<Answer> {
+  const found = await memberRoom($, input.room);
+  if ("error" in found) return { result: found.error!, isError: true };
+  const invited = await invite(
+    $,
+    found.room,
+    found.state,
+    input.projects ?? [],
+  );
+  return {
+    result: invited.length
+      ? `Invited ${invited.join(", ")} to #${found.room}.`
+      : "Nobody new to invite.",
+  };
+}
+
+async function roomPost($: Engine, input: ToolInput): Promise<Answer> {
+  const found = await memberRoom($, input.room);
+  if ("error" in found) return { result: found.error!, isError: true };
+  const at = await stamp($);
+  await write($, found.room, {
+    type: "message",
+    id: newId(at.ts),
+    text: input.text ?? "",
+    ...(input.to?.length ? { to: input.to } : {}),
+    ...(input.kind === "ask" ? { kind: "ask" as const } : {}),
+    ...(input.answers ? { answers: input.answers } : {}),
+    ...at,
+  });
+  return {
+    result: `Posted to #${found.room}${input.kind === "ask" ? ` as ask ${newId(at.ts)}` : ""}.`,
+  };
+}
+
+async function roomClose($: Engine, input: ToolInput): Promise<Answer> {
+  const found = await memberRoom($, input.room);
+  if ("error" in found) return { result: found.error!, isError: true };
+  if (found.state.owner !== (await me($)))
+    return {
+      result: `Only #${found.room}'s owner (${found.state.owner}) or Dylan can close it.`,
+      isError: true,
+    };
+  await write($, found.room, { type: "close", ...(await stamp($)) });
+  return { result: `Closed #${found.room}.` };
+}
+
+async function command($: Engine, args: string) {
+  const command = parseCommand(args);
+  if (command.kind === "error") return command.text;
+  if (command.kind === "list") return listText($, command.isAll);
+  const { room } = command;
+  const state = await loadRoom($, room);
+  if (state === undefined)
+    return `No room #${room}. Rooms are created with /izumo:create-room.`;
+  const project = await me($);
+  switch (command.kind) {
+    case "join":
+      if (state.isClosed) return `#${room} is closed.`;
+      if (!state.members.includes(project))
+        await write($, room, { type: "join", ...(await stamp($)) });
+      return `Joined #${room}`;
+    case "leave":
+      if (state.members.includes(project))
+        await write($, room, { type: "leave", ...(await stamp($)) });
+      return `Left #${room}`;
+    case "close":
+      // the person typed it, so no owner check: Dylan can retire any room
+      if (!state.isClosed)
+        await write($, room, { type: "close", ...(await stamp($)) });
+      return `Closed #${room}`;
+  }
+}
+
+const ROOM_PROP = {
+  type: "string",
+  description: "Room name without #, e.g. payments",
+};
+const PROJECTS = {
+  type: "array",
+  items: { type: "string" },
+  description: "Project folder names, e.g. skid",
+};
+
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
     await $.tool.register({
-      name: TOOL,
+      name: "RoomCreate",
       description:
-        "Post a short message to an izumo topic room you have joined, for agents in Dylan's other projects to read. Your project name is added automatically; don't prefix the text with it.",
+        "Create an izumo room shared with agents in Dylan's other projects, and invite projects to it. The room defaults to this project's name; an open room with that name is reused.",
       inputSchema: {
         type: "object",
         properties: {
-          topic: {
+          room: ROOM_PROP,
+          purpose: {
             type: "string",
-            description: "Room name without #, e.g. payments",
+            description: "One line: what the room is for",
           },
-          text: { type: "string", description: "The message" },
+          invite: PROJECTS,
         },
-        required: ["topic", "text"],
+        required: ["purpose"],
+      },
+    });
+    await $.tool.register({
+      name: "RoomInvite",
+      description:
+        "Invite projects to an izumo room you are in; their agents join automatically.",
+      inputSchema: {
+        type: "object",
+        properties: { room: ROOM_PROP, projects: PROJECTS },
+        required: ["room", "projects"],
+      },
+    });
+    await $.tool.register({
+      name: "RoomPost",
+      description:
+        "Post a short message to an izumo room you are in. Your project name is added automatically; don't prefix the text with it.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          room: ROOM_PROP,
+          text: { type: "string", description: "The message" },
+          to: {
+            ...PROJECTS,
+            description: 'Projects (or "dylan") this is addressed to',
+          },
+          kind: {
+            type: "string",
+            enum: ["ask"],
+            description: "Set when you need a reply or a decision",
+          },
+          answers: {
+            type: "string",
+            description: "The id of the ask this message answers",
+          },
+        },
+        required: ["room", "text"],
+      },
+    });
+    await $.tool.register({
+      name: "RoomClose",
+      description:
+        "Close an izumo room this project owns. Nobody can post or join after that.",
+      inputSchema: {
+        type: "object",
+        properties: { room: ROOM_PROP },
+        required: ["room"],
       },
     });
     await $.command.register({
       name: "izumo",
-      description: "Topic rooms shared with agents in other projects",
-      argumentHint: "join <topic> | leave <topic> | list",
+      description: "Rooms shared with agents in other projects",
+      argumentHint: "list [--all] | join <room> | leave <room> | close <room>",
     });
-    for (const topic of await joined($)) await skipToEnd($, topic);
+    await skipToEnd($);
+    await acceptInvites($, await allRooms($), false);
     $.clock.every(POLL_MS, () => {
       if (isPolling) return;
       isPolling = true;
@@ -137,51 +435,36 @@ export const register: Register = (on) => {
     return next(e);
   });
 
-  on("command.run", { command: "izumo" }, async ($, e) => {
-    const command = parseCommand(e.args);
-    const topics = await joined($);
-    switch (command.kind) {
-      case "error":
-        return { text: command.text };
-      case "list":
-        return {
-          text: topics.length
-            ? `izumo rooms: ${topics.map((t) => `#${t}`).join(", ")}`
-            : "Not in any izumo room. /izumo join <topic>",
-        };
-      case "join":
-        if (!topics.includes(command.topic))
-          await setJoined($, [...topics, command.topic]);
-        await skipToEnd($, command.topic);
-        return { text: `Joined #${command.topic}` };
-      case "leave":
-        await setJoined(
-          $,
-          topics.filter((t) => t !== command.topic),
-        );
-        cursors.delete(command.topic);
-        return { text: `Left #${command.topic}` };
-    }
-  });
-
-  on("tool.call", { tool: "mcp__izumo__RoomPost" }, async ($, e) => {
-    const { topic, text } = e as unknown as { topic: string; text: string };
-    const topics = await joined($);
-    if (!topics.includes(topic))
-      return {
-        result: `Not in #${topic}. Joined rooms: ${topics.map((t) => `#${t}`).join(", ") || "none"}.`,
-        isError: true,
-      };
-    await post($, topic, text);
-    return { result: `Posted to #${topic}` };
-  }).catch(() => ({
-    result: "izumo: RoomPost failed, nothing was posted.",
-    isError: true,
+  on("command.run", { command: "izumo" }, async ($, e) => ({
+    text: await command($, e.args),
   }));
+
+  const failed = {
+    result: "izumo: the call failed partway; check /izumo list for what was written.",
+    isError: true,
+  } as const;
+  on("tool.call", { tool: "mcp__izumo__RoomCreate" }, async ($, e) =>
+    roomCreate($, e as unknown as ToolInput),
+  ).catch(() => failed);
+  on("tool.call", { tool: "mcp__izumo__RoomInvite" }, async ($, e) =>
+    roomInvite($, e as unknown as ToolInput),
+  ).catch(() => failed);
+  on("tool.call", { tool: "mcp__izumo__RoomPost" }, async ($, e) =>
+    roomPost($, e as unknown as ToolInput),
+  ).catch(() => failed);
+  on("tool.call", { tool: "mcp__izumo__RoomClose" }, async ($, e) =>
+    roomClose($, e as unknown as ToolInput),
+  ).catch(() => failed);
 
   on("prompt.compose", async ($, e, next) => {
     const composed = await next(e);
-    const text = composeText(await joined($));
+    const text = composeText(
+      (await myRooms($)).map(({ room, state }) => ({
+        room,
+        owner: state.owner,
+        openAsks: state.openAsks.length,
+      })),
+    );
     if (text === undefined) return composed;
     return {
       ...composed,
@@ -194,13 +477,7 @@ export const register: Register = (on) => {
 
   on("prompt.context", async ($, e, next) => {
     const context = await next(e);
-    const rooms = [];
-    for (const topic of await joined($))
-      rooms.push({
-        topic,
-        messages: recent(await readRoom($, topic), CATCH_UP),
-      });
-    const text = catchUpText(rooms);
+    const text = catchUpText(await myRooms($), await $.clock.now());
     if (text === undefined) return context;
     return {
       ...context,
