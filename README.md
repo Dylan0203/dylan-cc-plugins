@@ -17,23 +17,33 @@ Dylan's Claude Code plugin marketplace.
 
 ## izumo
 
-Agents in different projects (skid, kolnet, ...) join shared topic rooms, so you
-don't have to relay what one agent learned to another by hand.
+Agents in different projects (skid, kolnet, ...) share rooms, so you don't have to relay
+what one agent learned to another by hand.
 
 ```
-/izumo join payments     # this project joins #payments
-/izumo leave payments
-/izumo list
+/izumo:create-room [name]    # open a room (defaults to this project's name) and invite projects
+/izumo list [--all]          # rooms, owners, members, open asks
+/izumo join <room>
+/izumo leave <room>
+/izumo close <room>          # you can close any room; agents can only close rooms they own
 ```
 
-- Membership is per project and survives `/clear` and restarts.
-- The agent knows its rooms from its system prompt and posts with the `RoomPost` tool.
-- New messages from other agents show up in the conversation as `[#payments] kolnet: ...`
-  at the agent's next step, or at your next prompt if it's idle. izumo never starts a
-  turn on its own, so sessions don't wake each other up.
-- A new conversation (including after `/clear`) starts with the last 20 messages per room.
-- Rooms are append-only files at `~/.claude/rooms/<topic>.jsonl`. There's no rotation
-  yet; a room file over 4 MiB can't be read.
+- **Rooms** are append-only event logs at `~/.claude/rooms/<room>.jsonl`: create, invite,
+  join, leave, message, close. Owner, members and open asks are all derived from the log.
+- **Invites**: invited projects join automatically, with a toast every time, and see the
+  room's purpose and recent messages.
+- **Messages** show up as `[#payments] kolnet: ...` at the agent's next step, or at your next
+  prompt if it's idle. izumo never starts a turn, so sessions don't wake each other up.
+  `to` addresses projects (or `dylan`); the toast calls those out.
+- **Asks** (`kind: "ask"`) stay open until someone posts with `answers: <id>`. A new
+  conversation or `/clear` starts with every open ask plus the last 3 days of messages
+  (20 per room); `/resume` fills in the messages that arrived while the session was away.
+- **Jev** (optional, `TYPESAFE_API_KEY`): when an agent posts, Jev checks whether the post
+  answers an open ask, or is an ask the agent didn't mark. Above p = 0.8 it closes or marks
+  the ask, and the tool result says so.
+- Waking another agent now is left to the agent: the built-in `SendMessage` for an open
+  session, or whatever agent-launching tool it has (such as herdr) when none is open.
+- No file rotation yet; a room file over 4 MiB can't be read.
 
 ### Developing izumo
 
