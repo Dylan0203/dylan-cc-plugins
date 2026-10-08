@@ -180,6 +180,28 @@ async function skipToEnd($: Engine) {
     cursors.set(room, { offset: (await readRoom($, room))?.length ?? 0, size });
 }
 
+const RESUME_MAX = 20;
+
+// A resumed conversation already has its first message, so prompt.context never runs again;
+// fill what arrived while it was away, skipping rows its transcript already holds.
+async function fillGap($: Engine, secondsAway: number) {
+  const since = (await $.clock.now()) - secondsAway * 1000;
+  const mine = await $.session.id();
+  const seen = new Set((await $.session.messages()).map((m) => m.text));
+  const missed = (await myRooms($))
+    .flatMap(({ room, state }) =>
+      state.messages
+        .filter((m) => m.ts > since && m.session !== mine)
+        .map((m) => ({ ts: m.ts, text: formatMessage(room, m) })),
+    )
+    .filter(({ text }) => !seen.has(text))
+    .sort((a, b) => a.ts - b.ts)
+    .slice(-RESUME_MAX);
+  for (const { text } of missed) await say($, text);
+  // the poll would otherwise deliver whatever its cursors had not reached yet a second time
+  await skipToEnd($);
+}
+
 const ago = (ms: number) => {
   const minutes = Math.floor(ms / 60_000);
   if (minutes < 60) return `${minutes}m`;
@@ -470,6 +492,15 @@ export const register: Register = (on) => {
       });
     });
     return next(e);
+  });
+
+  on("classic.SessionStart", async ($, e, next) => {
+    const answered = await next(e);
+    if (e.source === "resume")
+      await fillGap($, e.seconds_since_last_response ?? 0).catch((err: unknown) =>
+        $.ui.toast(`izumo: couldn't catch up after resume: ${err instanceof Error ? err.message : String(err)}`),
+      );
+    return answered;
   });
 
   on("command.run", { command: "izumo" }, async ($, e) => ({

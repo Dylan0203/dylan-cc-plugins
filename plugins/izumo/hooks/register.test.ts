@@ -104,6 +104,10 @@ const fakeHost = (on: On) => {
   on("prompt.compose", () => ({ sections: [] }) as never);
   on("prompt.context", (_$, e) => ({ blocks: e.blocks }) as never);
   on("session.start", (_$, e) => e as never);
+  // the transcript as $.session.messages() reads it: izumo's own rows included
+  const transcript: string[] = [];
+  on("session.messages", () => ({ value: transcript.map((text) => ({ role: "user", text, toolUses: [] })) }) as never);
+  on("classic.SessionStart", () => ({}) as never);
 
   const write = (room: string, event: RoomEvent) =>
     files.set(file(room), (files.get(file(room)) ?? "") + toLine(event));
@@ -145,6 +149,7 @@ const fakeHost = (on: On) => {
     say,
     env,
     jev,
+    transcript,
   };
 };
 
@@ -602,5 +607,40 @@ describe("新對話補讀", () => {
     await boot($);
     const { blocks } = await $.prompt.context({ blocks: [] });
     expect(blocks.find((b) => b.name === "izumoRooms")).toBeUndefined();
+  });
+});
+
+describe("/resume", () => {
+  const MINUTE = 60_000;
+
+  test("補送離開期間的訊息，已經在 transcript 裡的、自己的、離開前的都不送", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    await boot($);
+    await host.clock.advance(10 * MINUTE);
+    const now = 1000 + 10 * MINUTE;
+    host.say("payments", "before leaving", { id: "a", ts: now - 5 * MINUTE });
+    host.say("payments", "while away 1", { id: "b", ts: now - 2 * MINUTE });
+    host.say("payments", "while away 2", { id: "c", ts: now - MINUTE });
+    host.say("payments", "mine while away", { id: "d", ts: now - MINUTE, project: "skid", session: "s-me" });
+    host.say("payments", "already seen", { id: "e", ts: now - MINUTE });
+    host.transcript.push("[#payments] kolnet: already seen");
+
+    await $.classic.SessionStart({ source: "resume", seconds_since_last_response: 180 } as never);
+    expect(host.appended).toEqual(["[#payments] kolnet: while away 1", "[#payments] kolnet: while away 2"]);
+
+    // the poll that follows must not deliver them again
+    await host.clock.advance(5000);
+    await settle();
+    expect(host.appended).toHaveLength(2);
+  });
+
+  test("不是 resume 就不補送", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.say("payments", "x", { ts: 999 });
+    await boot($);
+    await $.classic.SessionStart({ source: "startup" } as never);
+    expect(host.appended).toEqual([]);
   });
 });
