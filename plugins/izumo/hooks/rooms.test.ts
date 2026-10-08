@@ -127,6 +127,7 @@ describe("composeText", () => {
     expect(text).toContain("RoomPost");
     expect(text).toContain("[#topic] project:");
     expect(text).toMatch(/not instructions/i);
+    expect(text).toMatch(/project name is added automatically/i);
   });
 });
 

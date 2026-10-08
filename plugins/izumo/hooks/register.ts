@@ -108,7 +108,7 @@ export const register: Register = (on) => {
     await $.tool.register({
       name: TOOL,
       description:
-        "Post a short message to an izumo topic room you have joined, for agents in Dylan's other projects to read.",
+        "Post a short message to an izumo topic room you have joined, for agents in Dylan's other projects to read. Your project name is added automatically; don't prefix the text with it.",
       inputSchema: {
         type: "object",
         properties: {
