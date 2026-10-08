@@ -333,6 +333,16 @@ describe("RoomPost 與 Jev", () => {
     expect(host.state("payments").openAsks.map((m) => m.id)).toEqual(["q1"]);
   });
 
+  test("差一點過門檻時提示 agent 自己補 answers，但不結案", async ($, on) => {
+    const host = await start($, on);
+    withAsk(host);
+    host.jev.answer = () => ({ answers_0: noul(0.76), isAsk: noul(0.1) });
+    await boot($);
+    const result = await tool($, "RoomPost", { room: "payments", text: "用 TWD 吧" });
+    expect(host.state("payments").openAsks.map((m) => m.id)).toEqual(["q1"]);
+    expect(String(result.result)).toMatch(/may answer ask q1 \(p=0\.76\).*answers: "q1"/);
+  });
+
   test("已經填了 answers 就不問 Jev", async ($, on) => {
     const host = await start($, on);
     withAsk(host);

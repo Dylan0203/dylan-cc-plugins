@@ -334,6 +334,8 @@ async function jevCheck($: Engine, room: string, state: RoomState, message: Mess
       await write($, room, { type: "resolve", ask, p, ...(await stamp($)) });
       notes.push(` Jev closed ask ${ask} (p=${p}).`);
     }
+    for (const { ask, p } of verdicts.maybe)
+      notes.push(` Jev thinks this may answer ask ${ask} (p=${p}); if it does, post a short follow-up with answers: "${ask}".`);
     if (verdicts.isAsk !== undefined) {
       await write($, room, { type: "ask-flag", id: message.id, ...(await stamp($)) });
       notes.push(` Jev marked it as an ask (${message.id}, p=${verdicts.isAsk}); set kind: "ask" yourself next time.`);

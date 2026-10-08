@@ -46,19 +46,25 @@ export const buildQuestions = (
   };
 };
 
+// Below the threshold Jev never closes an ask on its own; between MAYBE and the threshold
+// the poster is told, since it knows whether it meant to answer.
+const MAYBE = 0.5;
+
 export const jevVerdicts = (
   answers: Record<string, JevAnswer>,
   openAsks: readonly { id: string }[],
   threshold: number,
 ) => {
-  const resolved = openAsks.flatMap((ask, n) => {
+  const scored = openAsks.flatMap((ask, n) => {
     const p = answers[`answers_${n}`]?.noul;
-    return p !== undefined && p >= threshold ? [{ ask: ask.id, p }] : [];
+    return p === undefined ? [] : [{ ask: ask.id, p }];
   });
+  const resolved = scored.filter(({ p }) => p >= threshold);
+  const maybe = scored.filter(({ p }) => p >= MAYBE && p < threshold);
   const isAsk = answers.isAsk?.noul;
   return isAsk !== undefined && isAsk >= threshold
-    ? { resolved, isAsk }
-    : { resolved };
+    ? { resolved, maybe, isAsk }
+    : { resolved, maybe };
 };
 
 export async function askJev(

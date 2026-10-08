@@ -52,14 +52,24 @@ describe("jevVerdicts", () => {
     );
     expect(verdicts).toEqual({
       resolved: [{ ask: "q1", p: 0.91 }],
+      maybe: [],
       isAsk: 0.85,
     });
+  });
+
+  test("0.5 到門檻之間的 ask 列為 maybe，不自動結案", () => {
+    const verdicts = jevVerdicts(
+      { answers_0: { type: "noul", noul: 0.76 }, answers_1: { type: "noul", noul: 0.3 } },
+      asks,
+      0.8,
+    );
+    expect(verdicts).toEqual({ resolved: [], maybe: [{ ask: "q1", p: 0.76 }] });
   });
 
   test("低於門檻都不算", () => {
     expect(
       jevVerdicts({ isAsk: { type: "noul", noul: 0.5 } }, asks, 0.8),
-    ).toEqual({ resolved: [] });
+    ).toEqual({ resolved: [], maybe: [] });
   });
 });
 
