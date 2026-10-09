@@ -1,6 +1,6 @@
 {
   "name": "izumo",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Topic chat rooms for agents across projects.",
   "author": { "name": "Dylan" },
   "license": "MIT"
