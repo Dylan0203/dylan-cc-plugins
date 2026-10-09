@@ -428,7 +428,8 @@ async function command($: Engine, args: string) {
     case "log":
       return logText(room, state, command.count);
     case "show":
-      await $.ui.open({ id: `${PANE}${room}`, title: `#${room}` });
+      // the person asked for it to work in it, so it takes the keyboard
+      await $.ui.open({ id: `${PANE}${room}`, title: `#${room}`, focus: true });
       return `Opened #${room}`;
   }
 }
@@ -595,12 +596,13 @@ export const register: Register = (on) => {
         <Text bold>{roomHeader(room, state)}</Text>
         <Text dimColor>{state.purpose || "no purpose given"}</Text>
         {state.openAsks.length > 0 && <Text bold>Open asks</Text>}
-        {state.openAsks.map((m) => (
+        {state.openAsks.map((m, n) => (
           <Box flexDirection="column">
             <Text>{formatMessage(room, m)}</Text>
             {canWrite && Input && (
               <Input
                 key={`answer-${m.id}`}
+                autoFocus={n === 0 ? true : undefined}
                 placeholder="Answer as Dylan"
                 submitLabel="answer"
                 onSubmit={(value: string) => void postAsDylan($, room, value, m.id)}
@@ -616,6 +618,7 @@ export const register: Register = (on) => {
         {canWrite && Input && (
           <Input
             key="say"
+            autoFocus={state.openAsks.length === 0 ? true : undefined}
             placeholder="Say as Dylan"
             submitLabel="send"
             onSubmit={(value: string) => void postAsDylan($, room, value)}

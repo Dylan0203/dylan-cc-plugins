@@ -103,7 +103,7 @@ const fakeHost = (on: On) => {
   on("command.register", () => ({ value: undefined }) as never);
   const opened: string[] = [];
   on("ui.open", (_$, e) => {
-    opened.push(e.id);
+    opened.push(`${e.id}${e.focus ? " (focus)" : ""}`);
     return { value: { isPlaced: true } } as never;
   });
   on("prompt.compose", () => ({ sections: [] }) as never);
@@ -700,7 +700,8 @@ describe("/izumo show", () => {
     host.seedRoom("payments");
     await boot($);
     expect(await izumo($, "show payments")).toContain("#payments");
-    expect(host.opened).toEqual(["izumo-payments"]);
+    // the person asked for it to work in it, so it takes the keyboard
+    expect(host.opened).toEqual(["izumo-payments (focus)"]);
     expect(await izumo($, "show nowhere")).toMatch(/No room #nowhere/);
   });
 
@@ -717,7 +718,7 @@ describe("/izumo show", () => {
       expect(await ui.find({ text: /coordinate payments/ })).toBeDefined();
       expect(await ui.find({ text: /kolnet ask q1 → dylan: 要用 TWD 嗎？/ })).toBeDefined();
       expect(await ui.find({ text: /staging 已更新/ })).toBeDefined();
-      expect(await ui.find({ key: "answer-q1" })).toBeDefined();
+      expect((await ui.find({ key: "answer-q1" }))?.props.autoFocus).toBe(true);
 
       await ui.input({ key: "answer-q1", text: "用 TWD" });
       expect(host.events("payments").at(-1)).toEqual(
