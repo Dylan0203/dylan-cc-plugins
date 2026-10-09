@@ -101,6 +101,11 @@ const fakeHost = (on: On) => {
     (_$, e) => ({ value: { tool: `mcp__izumo__${e.name}` } }) as never,
   );
   on("command.register", () => ({ value: undefined }) as never);
+  const opened: string[] = [];
+  on("ui.open", (_$, e) => {
+    opened.push(e.id);
+    return { value: { isPlaced: true } } as never;
+  });
   on("prompt.compose", () => ({ sections: [] }) as never);
   on("prompt.context", (_$, e) => ({ blocks: e.blocks }) as never);
   on("session.start", (_$, e) => e as never);
@@ -150,6 +155,7 @@ const fakeHost = (on: On) => {
     env,
     jev,
     transcript,
+    opened,
   };
 };
 
@@ -671,5 +677,96 @@ describe("/resume", () => {
     await boot($);
     await $.classic.SessionStart({ source: "startup" } as never);
     expect(host.appended).toEqual([]);
+  });
+});
+
+const pane = (room: string) =>
+  ({
+    component: "Pane",
+    requestId: `izumo-${room}`,
+    props: {
+      title: `#${room}`,
+      isFocused: false,
+      bodyColumns: 80,
+      placement: "dock",
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  }) as const;
+
+describe("/izumo show", () => {
+  test("開一個以 room 命名的 pane", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    await boot($);
+    expect(await izumo($, "show payments")).toContain("#payments");
+    expect(host.opened).toEqual(["izumo-payments"]);
+    expect(await izumo($, "show nowhere")).toMatch(/No room #nowhere/);
+  });
+
+  for (const surface of ["terminal", "desktop"] as const) {
+    test(`pane 顯示 room，並能以 Dylan 回答 ask 與發言（${surface}）`, async ($, on) => {
+      const host = await start($, on);
+      host.seedRoom("payments");
+      host.say("payments", "要用 TWD 嗎？", { id: "q1", kind: "ask", to: ["dylan"] });
+      host.say("payments", "staging 已更新");
+      await boot($);
+
+      const ui = await $.ui.mount({ plugin: "izumo", surface, ...pane("payments") });
+      expect(await ui.find({ text: /#payments · owner kolnet · kolnet, skid/ })).toBeDefined();
+      expect(await ui.find({ text: /coordinate payments/ })).toBeDefined();
+      expect(await ui.find({ text: /kolnet ask q1 → dylan: 要用 TWD 嗎？/ })).toBeDefined();
+      expect(await ui.find({ text: /staging 已更新/ })).toBeDefined();
+      expect(await ui.find({ key: "answer-q1" })).toBeDefined();
+
+      await ui.input({ key: "answer-q1", text: "用 TWD" });
+      expect(host.events("payments").at(-1)).toEqual(
+        expect.objectContaining({ type: "message", project: "dylan", session: "dylan", answers: "q1", text: "用 TWD" }),
+      );
+      expect(host.state("payments").openAsks).toEqual([]);
+      await ui.redraw();
+      expect(await ui.find({ key: "answer-q1" })).toBeUndefined();
+
+      await ui.input({ key: "say", text: "週五上線" });
+      expect(host.events("payments").at(-1)).toEqual(
+        expect.objectContaining({ project: "dylan", text: "週五上線" }),
+      );
+      await ui.unmount();
+    });
+  }
+
+  test("Dylan 的訊息會投遞給成員，包括開著 pane 的這個 session", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    await boot($);
+    const ui = await $.ui.mount({ plugin: "izumo", surface: "terminal", ...pane("payments") });
+    await ui.input({ key: "say", text: "週五上線" });
+    await host.clock.advance(5000);
+    expect(await eventually(() => host.appended.length > 0)).toBe(true);
+    expect(host.appended).toEqual(["[#payments] dylan: 週五上線"]);
+    await ui.unmount();
+  });
+
+  test("沒有 Input 的 surface（mobile）只顯示內容", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.say("payments", "要用 TWD 嗎？", { id: "q1", kind: "ask" });
+    await boot($);
+    const ui = await $.ui.mount({ plugin: "izumo", surface: "mobile", ...pane("payments") });
+    expect(await ui.find({ text: /kolnet ask q1: 要用 TWD 嗎？/ })).toBeDefined();
+    expect(await ui.find({ key: "answer-q1" })).toBeUndefined();
+    expect(await ui.find({ key: "say" })).toBeUndefined();
+    await ui.unmount();
+  });
+
+  test("關閉的 room 沒有輸入框", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.write("payments", { type: "close", ts: 3, project: "kolnet", session: "s-k" });
+    await boot($);
+    const ui = await $.ui.mount({ plugin: "izumo", surface: "terminal", ...pane("payments") });
+    expect(await ui.find({ text: /closed/ })).toBeDefined();
+    expect(await ui.find({ key: "say" })).toBeUndefined();
+    await ui.unmount();
   });
 });

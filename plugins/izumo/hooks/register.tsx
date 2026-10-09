@@ -12,6 +12,7 @@ import {
   parseEvents,
   projectName,
   readSince,
+  roomHeader,
   toLine,
   type MessageEvent,
   type RoomEvent,
@@ -101,6 +102,26 @@ async function stamp($: Engine) {
   };
 }
 
+const PANE = "izumo-";
+
+// Dylan writes from the pane as himself: session "dylan" matches no agent's session, so every
+// member's poll delivers it, the session that holds the pane included.
+async function postAsDylan($: Engine, room: string, text: string, answers?: string) {
+  const body = text.trim();
+  if (!body) return;
+  const ts = await $.clock.now();
+  await write($, room, {
+    type: "message",
+    id: newId(ts),
+    text: body,
+    ...(answers ? { answers } : {}),
+    ts,
+    project: "dylan",
+    session: "dylan",
+  });
+  $.ui.invalidate("ui.render");
+}
+
 async function say($: Engine, text: string) {
   await $.session.append({
     message: { type: "user", content: [{ type: "text", text }] },
@@ -174,6 +195,8 @@ async function poll($: Engine) {
       await say($, `[#${room}] #${room} was closed by ${closed.project}.`);
   }
   await acceptInvites($, changed, true);
+  // an open izumo pane reads its room fresh on every draw
+  if (changed.length > 0) $.ui.invalidate("ui.render");
 }
 
 async function skipToEnd($: Engine) {
@@ -405,7 +428,8 @@ async function command($: Engine, args: string) {
     case "log":
       return logText(room, state, command.count);
     case "show":
-      return "/izumo show is not built yet.";
+      await $.ui.open({ id: `${PANE}${room}`, title: `#${room}` });
+      return `Opened #${room}`;
   }
 }
 
@@ -548,6 +572,57 @@ export const register: Register = (on) => {
         { id: "izumo:rooms", text, scope: "session" as const },
       ],
     };
+  });
+
+  on("ui.render", { component: "Pane" }, async ($, e, next) => {
+    if (!e.requestId.startsWith(PANE)) return next(e);
+    const room = e.requestId.slice(PANE.length);
+    const elements = $.ui.resolve(e);
+    const { Box, Text } = elements;
+    // mobile draws no Input: the pane is read-only there
+    const Input = "Input" in elements ? elements.Input : undefined;
+    const state = await loadRoom($, room);
+    if (state === undefined) return <Text dimColor>No room #{room}.</Text>;
+
+    const askIds = new Set(state.openAsks.map((m) => m.id));
+    const rows = e.viewport?.rows ?? 24;
+    const recentCount = Math.max(5, rows - 8 - state.openAsks.length * 2);
+    const recent = state.messages.filter((m) => !askIds.has(m.id)).slice(-recentCount);
+    const canWrite = !state.isClosed && Input !== undefined;
+
+    return (
+      <Box flexDirection="column">
+        <Text bold>{roomHeader(room, state)}</Text>
+        <Text dimColor>{state.purpose || "no purpose given"}</Text>
+        {state.openAsks.length > 0 && <Text bold>Open asks</Text>}
+        {state.openAsks.map((m) => (
+          <Box flexDirection="column">
+            <Text>{formatMessage(room, m)}</Text>
+            {canWrite && Input && (
+              <Input
+                key={`answer-${m.id}`}
+                placeholder="Answer as Dylan"
+                submitLabel="answer"
+                onSubmit={(value: string) => void postAsDylan($, room, value, m.id)}
+              />
+            )}
+          </Box>
+        ))}
+        <Text bold>Recent</Text>
+        {recent.length === 0 && <Text dimColor>No messages yet.</Text>}
+        {recent.map((m) => (
+          <Text>{formatMessage(room, m)}</Text>
+        ))}
+        {canWrite && Input && (
+          <Input
+            key="say"
+            placeholder="Say as Dylan"
+            submitLabel="send"
+            onSubmit={(value: string) => void postAsDylan($, room, value)}
+          />
+        )}
+      </Box>
+    );
   });
 
   on("prompt.context", async ($, e, next) => {
