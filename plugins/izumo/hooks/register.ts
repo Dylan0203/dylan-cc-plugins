@@ -6,6 +6,7 @@ import {
   foldRoom,
   formatMessage,
   isRoomName,
+  logText,
   newId,
   parseCommand,
   parseEvents,
@@ -401,6 +402,10 @@ async function command($: Engine, args: string) {
       if (!state.isClosed)
         await write($, room, { type: "close", ...(await stamp($)) });
       return `Closed #${room}`;
+    case "log":
+      return logText(room, state, command.count);
+    case "show":
+      return "/izumo show is not built yet.";
   }
 }
 

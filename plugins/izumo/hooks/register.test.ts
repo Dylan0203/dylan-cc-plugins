@@ -469,6 +469,25 @@ describe("/izumo", () => {
   });
 });
 
+describe("/izumo log", () => {
+  test("不是成員也能看，顯示 purpose 與最近訊息", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments", ["kolnet"]);
+    host.say("payments", "要用 TWD 嗎？", { id: "q1", kind: "ask" });
+    await boot($);
+    const text = await izumo($, "log payments");
+    expect(text).toContain("#payments · owner kolnet");
+    expect(text).toContain("coordinate payments");
+    expect(text).toContain("[#payments] kolnet ask q1: 要用 TWD 嗎？ [open]");
+  });
+
+  test("不存在的 room 回錯誤", async ($, on) => {
+    await start($, on);
+    await boot($);
+    expect(await izumo($, "log nowhere")).toMatch(/No room #nowhere/);
+  });
+});
+
 describe("投遞", () => {
   test("別人的新訊息塞進對話一次，自己的跳過，啟動前的舊訊息不重送", async ($, on) => {
     const host = await start($, on);

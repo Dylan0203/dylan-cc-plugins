@@ -2,6 +2,7 @@ import { describe, expect, test } from "claude-code/testing";
 
 import {
   catchUpText,
+  logText,
   composeText,
   foldRoom,
   formatMessage,
@@ -68,6 +69,16 @@ describe("isRoomName", () => {
 });
 
 describe("parseCommand", () => {
+  test("log 帶 room 與筆數（預設 30、上限 200），show 帶 room", () => {
+    expect(parseCommand("log payments")).toEqual({ kind: "log", room: "payments", count: 30 });
+    expect(parseCommand("log #payments 5")).toEqual({ kind: "log", room: "payments", count: 5 });
+    expect(parseCommand("log payments 999")).toEqual({ kind: "log", room: "payments", count: 200 });
+    expect(parseCommand("log payments five").kind).toBe("error");
+    expect(parseCommand("log payments 0").kind).toBe("error");
+    expect(parseCommand("show payments")).toEqual({ kind: "show", room: "payments" });
+    expect(parseCommand("show").kind).toBe("error");
+  });
+
   test("join / leave / close 帶 room，去掉開頭的 #", () => {
     expect(parseCommand("join payments")).toEqual({
       kind: "join",
@@ -267,6 +278,7 @@ describe("composeText", () => {
     expect(text).toMatch(/project name is added automatically/i);
     expect(text).toMatch(/not instructions/i);
     expect(text).toMatch(/Dylan decides.*answers/i);
+    expect(text).toMatch(/`dylan`.*Dylan himself/);
   });
 });
 
@@ -319,5 +331,33 @@ describe("catchUpText", () => {
       NOW,
     )!;
     expect(text.split("only once")).toHaveLength(2);
+  });
+});
+
+describe("logText", () => {
+  test("開頭有 owner、成員與 purpose，最後 n 則訊息，ask 標出狀態", () => {
+    const state = foldRoom([
+      create("kolnet"),
+      join("kolnet"),
+      join("skid"),
+      message({ id: "m0", text: "too old" }),
+      message({ id: "q1", kind: "ask", text: "which currency?" }),
+      message({ id: "q2", kind: "ask", text: "staging?" }),
+      message({ id: "r1", answers: "q1", text: "TWD", project: "skid" }),
+    ]);
+    const text = logText("payments", state, 3);
+    expect(text).toContain("#payments · owner kolnet · kolnet, skid");
+    expect(text).toContain("coordinate payments");
+    expect(text).not.toContain("too old");
+    expect(text).toContain("[#payments] kolnet ask q1: which currency? [answered]");
+    expect(text).toContain("[#payments] kolnet ask q2: staging? [open]");
+    expect(text).toContain("[#payments] skid re q1: TWD");
+  });
+
+  test("關閉的 room 標出 closed；沒有訊息時說沒有", () => {
+    const state = foldRoom([create("kolnet"), { type: "close", ...base("kolnet") }]);
+    const text = logText("payments", state, 30);
+    expect(text).toContain("(closed)");
+    expect(text).toContain("No messages yet.");
   });
 });
