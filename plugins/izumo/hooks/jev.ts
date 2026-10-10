@@ -38,11 +38,14 @@ export const buildQuestions = (
       instructions:
         "Is `message.text` asking another agent or Dylan for a reply or a decision that the writer is waiting on? A status update, an announcement or a rhetorical question does not count.",
     };
+  // Asked as "is it only FYI" rather than "do they need to act": in live probes the second
+  // framing scored real hand-offs 0.59-0.78, while this one splits them (<= 0.06) cleanly
+  // from thank-yous and FYIs (>= 0.81).
   if (needsWake)
-    questions.wake = {
+    questions.fyi = {
       type: "noul",
       instructions:
-        "Does `message.text` need the projects in `message.to` to do something or reply now? A status update, a thank-you, an acknowledgement or something they already know does not count.",
+        "Is `message.text` only a thank-you, an acknowledgement or a pure FYI, so that the projects in `message.to` have nothing to do and nothing to reply?",
     };
   const { project, text, to } = message;
   return {
@@ -70,13 +73,13 @@ export const jevVerdicts = (
   const resolved = scored.filter(({ p }) => p >= threshold);
   const maybe = scored.filter(({ p }) => p >= MAYBE && p < threshold);
   const isAsk = answers.isAsk?.noul;
-  // left raw: the receiving session applies its own wake threshold
-  const wake = answers.wake?.noul;
+  // left raw: the receiving session applies its own threshold
+  const fyi = answers.fyi?.noul;
   return {
     resolved,
     maybe,
     ...(isAsk !== undefined && isAsk >= threshold ? { isAsk } : {}),
-    ...(wake !== undefined ? { wake } : {}),
+    ...(fyi !== undefined ? { fyi } : {}),
   };
 };
 
