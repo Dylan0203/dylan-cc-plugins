@@ -195,6 +195,25 @@ export const formatMessage = (room: string, m: MessageEvent): string => {
   return `[#${room}] ${m.project}${ask}${re}${to}: ${m.text}`;
 };
 
+export const ago = (ms: number): string => {
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `${minutes}m`;
+  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}h`;
+  return `${Math.floor(minutes / (24 * 60))}d`;
+};
+
+// Theme keys rather than hex, so the pane reads in light and dark themes alike.
+const PROJECT_COLORS = ["suggestion", "success", "merged", "claude", "ide", "permission", "autoAccept", "planMode"] as const;
+
+// Stable per project, so a project keeps its color from one draw and one session to the next;
+// Dylan always stands out in the warning color.
+export const projectColor = (project: string): string => {
+  if (project === "dylan") return "warning";
+  let hash = 0;
+  for (const char of project) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return PROJECT_COLORS[hash % PROJECT_COLORS.length]!;
+};
+
 export const projectName = (root: string): string =>
   root.replace(/\/+$/, "").split("/").at(-1) ?? root;
 

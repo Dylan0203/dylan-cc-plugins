@@ -1,7 +1,9 @@
 import { describe, expect, test } from "claude-code/testing";
 
 import {
+  ago,
   catchUpText,
+  projectColor,
   logText,
   composeText,
   foldRoom,
@@ -360,4 +362,25 @@ describe("logText", () => {
     expect(text).toContain("(closed)");
     expect(text).toContain("No messages yet.");
   });
+});
+
+describe("projectColor", () => {
+  test("同一個專案永遠同一個主題色，dylan 固定 warning", () => {
+    expect(projectColor("kolnet")).toBe(projectColor("kolnet"));
+    expect(projectColor("dylan")).toBe("warning");
+    const palette = ["suggestion", "success", "merged", "claude", "ide", "permission", "autoAccept", "planMode"];
+    for (const p of ["skid", "kolnet", "yeshealth", "odd-patchflow"]) expect(palette).toContain(projectColor(p));
+  });
+
+  test("不同專案不會全部擠在同一個顏色", () => {
+    const colors = new Set(["skid", "kolnet", "yeshealth", "odd-patchflow", "alpha", "beta"].map(projectColor));
+    expect(colors.size).toBeGreaterThan(2);
+  });
+});
+
+test("ago 用分、時、天表示經過時間", () => {
+  expect(ago(30_000)).toBe("0m");
+  expect(ago(5 * 60_000)).toBe("5m");
+  expect(ago(2 * 60 * 60_000)).toBe("2h");
+  expect(ago(3 * 24 * 60 * 60_000)).toBe("3d");
 });

@@ -4,6 +4,7 @@ import {
   catchUpText,
   composeText,
   foldRoom,
+  ago,
   formatMessage,
   isRoomName,
   logText,
@@ -225,13 +226,6 @@ async function fillGap($: Engine, secondsAway: number) {
   // the poll would otherwise deliver whatever its cursors had not reached yet a second time
   await skipToEnd($);
 }
-
-const ago = (ms: number) => {
-  const minutes = Math.floor(ms / 60_000);
-  if (minutes < 60) return `${minutes}m`;
-  if (minutes < 24 * 60) return `${Math.floor(minutes / 60)}h`;
-  return `${Math.floor(minutes / (24 * 60))}d`;
-};
 
 async function listText($: Engine, isAll: boolean) {
   const project = await me($);
