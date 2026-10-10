@@ -817,13 +817,13 @@ describe("叫醒", () => {
     expect(host.submitted[0]).toContain("#payments has 2 messages addressed to this project (from kolnet)");
   });
 
-  test("沒指名、深度到 2、Jev 判斷不用動作的都不叫醒，但訊息照樣送進對話", async ($, on) => {
+  test("沒指名、深度到 2、Jev 判斷只是致謝的都不叫醒，但訊息照樣送進對話", async ($, on) => {
     const host = await start($, on);
     host.seedRoom("payments");
     await boot($);
     host.say("payments", "FYI", { id: "a" });
     host.say("payments", "鏈太深", { id: "b", to: ["skid"], depth: 2 });
-    host.say("payments", "謝謝", { id: "c", to: ["skid"], wake: 0.2 });
+    host.say("payments", "謝謝", { id: "c", to: ["skid"], fyi: 0.83 });
     await tick(host);
     expect(host.appended).toHaveLength(3);
     expect(host.submitted).toEqual([]);
@@ -878,10 +878,10 @@ describe("叫醒", () => {
     const host = await start($, on);
     host.seedRoom("payments");
     host.env.TYPESAFE_API_KEY = "k";
-    host.jev.answer = () => ({ wake: { type: "noul", noul: 0.31 }, isAsk: { type: "noul", noul: 0.1 } });
+    host.jev.answer = () => ({ fyi: { type: "noul", noul: 0.83 }, isAsk: { type: "noul", noul: 0.1 } });
     await boot($);
     await tool($, "RoomPost", { room: "payments", text: "謝謝", to: ["kolnet"] });
-    expect(Object.keys(host.jev.calls[0]!.questions)).toEqual(["isAsk", "wake"]);
-    expect(host.events("payments").at(-1)).toEqual(expect.objectContaining({ text: "謝謝", wake: 0.31 }));
+    expect(Object.keys(host.jev.calls[0]!.questions)).toEqual(["isAsk", "fyi"]);
+    expect(host.events("payments").at(-1)).toEqual(expect.objectContaining({ text: "謝謝", fyi: 0.83 }));
   });
 });

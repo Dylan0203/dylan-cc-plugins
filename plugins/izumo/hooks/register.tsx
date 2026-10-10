@@ -447,8 +447,8 @@ async function roomPost($: Engine, input: ToolInput): Promise<Answer> {
     ...at,
   };
   const judged = await judge($, found.state, drafted);
-  const wakeP = judged.verdicts?.wake;
-  const message = wakeP === undefined ? drafted : { ...drafted, wake: wakeP };
+  const fyi = judged.verdicts?.fyi;
+  const message = fyi === undefined ? drafted : { ...drafted, fyi };
   await write($, found.room, message);
   const asAsk = message.kind === "ask" ? ` as ask ${message.id}` : "";
   const applied = judged.verdicts ? await applyVerdicts($, found.room, message, judged.verdicts) : "";
