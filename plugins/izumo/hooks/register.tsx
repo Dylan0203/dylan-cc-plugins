@@ -1,4 +1,4 @@
-import type { EngineInterface as Engine, Register } from "claude-code";
+import type { Elements, EngineInterface as Engine, Register } from "claude-code";
 
 import {
   catchUpText,
@@ -11,9 +11,9 @@ import {
   newId,
   parseCommand,
   parseEvents,
+  projectColor,
   projectName,
   readSince,
-  roomHeader,
   toLine,
   type MessageEvent,
   type RoomEvent,
@@ -104,6 +104,32 @@ async function stamp($: Engine) {
 }
 
 const PANE = "izumo-";
+// messages run several lines each, so a fixed count and the pane's own scrolling
+// read better than fitting the viewport row by row
+const PANE_RECENT = 15;
+
+type CardElements = Pick<Elements["terminal"], "Box" | "Text" | "Markdown">;
+
+// One message as the pane draws it: a header (who, to whom, ask or reply, how long ago)
+// and the body as Markdown, since agents write lists and code spans.
+function messageCard({ Box, Text, Markdown }: CardElements, m: MessageEvent, now: number) {
+  return (
+    <Box flexDirection="column">
+      <Box flexDirection="row" gap={1}>
+        <Text bold color={projectColor(m.project)}>
+          {m.project}
+        </Text>
+        {m.to?.length ? <Text dimColor>→ {m.to.join(", ")}</Text> : null}
+        {m.kind === "ask" ? <Text color="warning">ask {m.id}</Text> : null}
+        {m.answers !== undefined ? <Text color="success">re {m.answers}</Text> : null}
+        <Text dimColor>· {ago(now - m.ts)}</Text>
+      </Box>
+      <Box paddingLeft={2}>
+        <Markdown text={m.text} />
+      </Box>
+    </Box>
+  );
+}
 
 // Dylan writes from the pane as himself: session "dylan" matches no agent's session, so every
 // member's poll delivers it, the session that holds the pane included.
@@ -579,44 +605,69 @@ export const register: Register = (on) => {
     const state = await loadRoom($, room);
     if (state === undefined) return <Text dimColor>No room #{room}.</Text>;
 
+    const now = await $.clock.now();
     const askIds = new Set(state.openAsks.map((m) => m.id));
-    const rows = e.viewport?.rows ?? 24;
-    const recentCount = Math.max(5, rows - 8 - state.openAsks.length * 2);
-    const recent = state.messages.filter((m) => !askIds.has(m.id)).slice(-recentCount);
+    const recent = state.messages.filter((m) => !askIds.has(m.id)).slice(-PANE_RECENT);
     const canWrite = !state.isClosed && Input !== undefined;
+    const meta = [
+      ...(state.isClosed ? ["closed"] : []),
+      `owner ${state.owner ?? "unknown"}`,
+      state.members.join(", ") || "no members",
+    ].join(" · ");
 
     return (
       <Box flexDirection="column">
-        <Text bold>{roomHeader(room, state)}</Text>
-        <Text dimColor>{state.purpose || "no purpose given"}</Text>
-        {state.openAsks.length > 0 && <Text bold>Open asks</Text>}
-        {state.openAsks.map((m, n) => (
-          <Box flexDirection="column">
-            <Text>{formatMessage(room, m)}</Text>
-            {canWrite && Input && (
-              <Input
-                key={`answer-${m.id}`}
-                autoFocus={n === 0 ? true : undefined}
-                placeholder="Answer as Dylan"
-                submitLabel="answer"
-                onSubmit={(value: string) => void postAsDylan($, room, value, m.id)}
-              />
-            )}
+        <Text bold>#{room}</Text>
+        <Text dimColor>{meta}</Text>
+        <Text dimColor italic>
+          {state.purpose || "no purpose given"}
+        </Text>
+
+        {state.openAsks.length > 0 && (
+          <Box key="asks" flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1} marginTop={1}>
+            <Text bold color="warning">
+              Open asks ({state.openAsks.length})
+            </Text>
+            {state.openAsks.map((m, n) => (
+              <Box flexDirection="column" marginTop={1}>
+                {messageCard(elements, m, now)}
+                {canWrite && Input && (
+                  <Box paddingLeft={2}>
+                    <Input
+                      key={`answer-${m.id}`}
+                      autoFocus={n === 0 ? true : undefined}
+                      placeholder="Answer as Dylan"
+                      submitLabel="answer"
+                      onSubmit={(value: string) => void postAsDylan($, room, value, m.id)}
+                    />
+                  </Box>
+                )}
+              </Box>
+            ))}
           </Box>
-        ))}
-        <Text bold>Recent</Text>
+        )}
+
+        <Box marginTop={1}>
+          <Text bold>Recent</Text>
+        </Box>
         {recent.length === 0 && <Text dimColor>No messages yet.</Text>}
         {recent.map((m) => (
-          <Text>{formatMessage(room, m)}</Text>
+          <Box flexDirection="column" marginTop={1}>
+            {messageCard(elements, m, now)}
+          </Box>
         ))}
+
         {canWrite && Input && (
-          <Input
-            key="say"
-            autoFocus={state.openAsks.length === 0 ? true : undefined}
-            placeholder="Say as Dylan"
-            submitLabel="send"
-            onSubmit={(value: string) => void postAsDylan($, room, value)}
-          />
+          <Box marginTop={1} flexDirection="column">
+            <Text dimColor>{"─".repeat(Math.max(10, Math.min(e.props.bodyColumns, 80)))}</Text>
+            <Input
+              key="say"
+              autoFocus={state.openAsks.length === 0 ? true : undefined}
+              placeholder="Say as Dylan"
+              submitLabel="send"
+              onSubmit={(value: string) => void postAsDylan($, room, value)}
+            />
+          </Box>
         )}
       </Box>
     );

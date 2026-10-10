@@ -1,7 +1,7 @@
 import type { On } from "claude-code";
 import { describe, expect, mock, test, type Engine } from "claude-code/testing";
 
-import { foldRoom, parseEvents, toLine, type RoomEvent } from "./rooms";
+import { foldRoom, parseEvents, projectColor, toLine, type RoomEvent } from "./rooms";
 
 // the test runtime has real timers; the hooks lib types leave them out
 declare const setTimeout: (callback: () => void, ms: number) => unknown;
@@ -680,6 +680,14 @@ describe("/resume", () => {
   });
 });
 
+// every Markdown body in a drawn tree, in document order
+const markdownTexts = (node: unknown): string[] => {
+  if (typeof node !== "object" || node === null) return [];
+  const { type, props, children } = node as { type?: string; props?: { text?: string }; children?: unknown[] };
+  const own = type === "Markdown" && typeof props?.text === "string" ? [props.text] : [];
+  return [...own, ...(children ?? []).flatMap(markdownTexts)];
+};
+
 const pane = (room: string) =>
   ({
     component: "Pane",
@@ -710,14 +718,20 @@ describe("/izumo show", () => {
       const host = await start($, on);
       host.seedRoom("payments");
       host.say("payments", "要用 TWD 嗎？", { id: "q1", kind: "ask", to: ["dylan"] });
-      host.say("payments", "staging 已更新");
+      host.say("payments", "- staging 已更新\n- 跑 `db:migrate`");
       await boot($);
 
       const ui = await $.ui.mount({ plugin: "izumo", surface, ...pane("payments") });
-      expect(await ui.find({ text: /#payments · owner kolnet · kolnet, skid/ })).toBeDefined();
+      expect(await ui.find({ text: /^#payments$/ })).toBeDefined();
+      expect(await ui.find({ text: /owner kolnet · kolnet, skid/ })).toBeDefined();
       expect(await ui.find({ text: /coordinate payments/ })).toBeDefined();
-      expect(await ui.find({ text: /kolnet ask q1 → dylan: 要用 TWD 嗎？/ })).toBeDefined();
-      expect(await ui.find({ text: /staging 已更新/ })).toBeDefined();
+
+      // each message: a header with the project in its own color, then the body as Markdown
+      expect((await ui.find({ type: "Text", text: /^kolnet$/ }))?.props.color).toBe(projectColor("kolnet"));
+      expect((await ui.find({ type: "Text", text: /ask q1/ }))?.props.color).toBe("warning");
+      expect(await ui.find({ text: /→ dylan/ })).toBeDefined();
+      expect(markdownTexts(await ui.drawn())).toEqual(["要用 TWD 嗎？", "- staging 已更新\n- 跑 `db:migrate`"]);
+      expect((await ui.find({ key: "asks" }))?.props.borderStyle).toBeDefined();
       expect((await ui.find({ key: "answer-q1" }))?.props.autoFocus).toBe(true);
 
       await ui.input({ key: "answer-q1", text: "用 TWD" });
@@ -727,6 +741,9 @@ describe("/izumo show", () => {
       expect(host.state("payments").openAsks).toEqual([]);
       await ui.redraw();
       expect(await ui.find({ key: "answer-q1" })).toBeUndefined();
+      expect(await ui.find({ key: "asks" })).toBeUndefined();
+      expect((await ui.find({ type: "Text", text: /^dylan$/ }))?.props.color).toBe("warning");
+      expect((await ui.find({ type: "Text", text: /re q1/ }))?.props.color).toBe("success");
 
       await ui.input({ key: "say", text: "週五上線" });
       expect(host.events("payments").at(-1)).toEqual(
@@ -754,7 +771,7 @@ describe("/izumo show", () => {
     host.say("payments", "要用 TWD 嗎？", { id: "q1", kind: "ask" });
     await boot($);
     const ui = await $.ui.mount({ plugin: "izumo", surface: "mobile", ...pane("payments") });
-    expect(await ui.find({ text: /kolnet ask q1: 要用 TWD 嗎？/ })).toBeDefined();
+    expect(markdownTexts(await ui.drawn())).toEqual(["要用 TWD 嗎？"]);
     expect(await ui.find({ key: "answer-q1" })).toBeUndefined();
     expect(await ui.find({ key: "say" })).toBeUndefined();
     await ui.unmount();
