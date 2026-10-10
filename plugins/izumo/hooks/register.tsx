@@ -37,9 +37,6 @@ type Answer = { result: string; isError?: true };
 const cursors = new Map<string, { offset: number; size: number }>();
 // clock.every does not wait for an async callback, so a slow poll would overlap the next tick
 let isPolling = false;
-// Waking this session: whether a model turn is running (its next step sees the appended rows,
-// so no wake), whether izumo's own prompt is already queued, and the wake depth of the turn
-// it starts. turnDepth is the depth of the turn now running, stamped on every RoomPost.
 let isTurnRunning = false;
 let isWakeQueued = false;
 let turnDepth = 0;
