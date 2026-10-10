@@ -101,6 +101,14 @@ const fakeHost = (on: On) => {
     (_$, e) => ({ value: { tool: `mcp__izumo__${e.name}` } }) as never,
   );
   on("command.register", () => ({ value: undefined }) as never);
+  // prompts izumo submits to wake this session
+  const submitted: string[] = [];
+  on("prompt.submit", (_$, e) => {
+    submitted.push(e.text);
+    return { text: e.text } as never;
+  });
+  on("turn.start", (_$, e) => ({ turnId: e.turnId }) as never);
+  on("turn.complete", () => ({ text: "" }) as never);
   const opened: string[] = [];
   on("ui.open", (_$, e) => {
     opened.push(`${e.id}${e.focus ? " (focus)" : ""}`);
@@ -156,6 +164,7 @@ const fakeHost = (on: On) => {
     jev,
     transcript,
     opened,
+    submitted,
   };
 };
 
@@ -786,5 +795,93 @@ describe("/izumo show", () => {
     expect(await ui.find({ text: /closed/ })).toBeDefined();
     expect(await ui.find({ key: "say" })).toBeUndefined();
     await ui.unmount();
+  });
+});
+
+describe("叫醒", () => {
+  const tick = async (host: { clock: { advance: (ms: number) => Promise<void> } }) => {
+    await host.clock.advance(5000);
+    await settle();
+  };
+
+  test("指名這個專案的訊息會叫醒 idle 的 session，同一輪只送一個 prompt", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    await boot($);
+    host.say("payments", "請今天上線", { id: "a", to: ["skid"] });
+    host.say("payments", "順便看 log", { id: "b", to: ["skid"] });
+    await host.clock.advance(5000);
+    expect(await eventually(() => host.submitted.length > 0)).toBe(true);
+    await settle();
+    expect(host.submitted).toHaveLength(1);
+    expect(host.submitted[0]).toContain("#payments has 2 messages addressed to this project (from kolnet)");
+  });
+
+  test("沒指名、深度到 2、Jev 判斷不用動作的都不叫醒，但訊息照樣送進對話", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    await boot($);
+    host.say("payments", "FYI", { id: "a" });
+    host.say("payments", "鏈太深", { id: "b", to: ["skid"], depth: 2 });
+    host.say("payments", "謝謝", { id: "c", to: ["skid"], wake: 0.2 });
+    await tick(host);
+    expect(host.appended).toHaveLength(3);
+    expect(host.submitted).toEqual([]);
+  });
+
+  test("session 正在跑一輪時不叫醒，結束後的新訊息才叫醒", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    await boot($);
+    await $.turn.start({ text: "working", turnId: "t1" });
+    host.say("payments", "請今天上線", { id: "a", to: ["skid"] });
+    await tick(host);
+    expect(host.appended).toHaveLength(1);
+    expect(host.submitted).toEqual([]);
+
+    await $.turn.complete({ turnId: "t1", reason: "end_turn" } as never);
+    host.say("payments", "還有一件", { id: "b", to: ["skid"] });
+    await host.clock.advance(5000);
+    expect(await eventually(() => host.submitted.length > 0)).toBe(true);
+  });
+
+  test("Dylan 在 pane 回答這個專案的 ask，會叫醒它", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.say("payments", "TWD?", { id: "q1", kind: "ask", project: "skid", session: "s-old" });
+    await boot($);
+    const ui = await $.ui.mount({ plugin: "izumo", surface: "terminal", ...pane("payments") });
+    await ui.input({ key: "answer-q1", text: "用 TWD" });
+    await ui.unmount();
+    await host.clock.advance(5000);
+    expect(await eventually(() => host.submitted.length > 0)).toBe(true);
+    expect(host.submitted[0]).toContain("from dylan");
+  });
+
+  test("izumo 叫醒的那一輪發的訊息帶 depth 1；人開始的一輪不帶", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    await boot($);
+    host.say("payments", "請回報", { id: "a", to: ["skid"] });
+    await host.clock.advance(5000);
+    expect(await eventually(() => host.submitted.length > 0)).toBe(true);
+    await tool($, "RoomPost", { room: "payments", text: "好了", to: ["kolnet"] });
+    expect(host.events("payments").at(-1)).toEqual(expect.objectContaining({ text: "好了", depth: 1 }));
+
+    await $.prompt.submit({ text: "Dylan types something", wait: false, origin: { kind: "composer" } } as never);
+    await tool($, "RoomPost", { room: "payments", text: "再補一句" });
+    const last = host.events("payments").at(-1) as { depth?: number };
+    expect(last.depth).toBeUndefined();
+  });
+
+  test("有指名時 RoomPost 先問 Jev 要不要叫醒，分數存在訊息上", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.env.TYPESAFE_API_KEY = "k";
+    host.jev.answer = () => ({ wake: { type: "noul", noul: 0.31 }, isAsk: { type: "noul", noul: 0.1 } });
+    await boot($);
+    await tool($, "RoomPost", { room: "payments", text: "謝謝", to: ["kolnet"] });
+    expect(Object.keys(host.jev.calls[0]!.questions)).toEqual(["isAsk", "wake"]);
+    expect(host.events("payments").at(-1)).toEqual(expect.objectContaining({ text: "謝謝", wake: 0.31 }));
   });
 });

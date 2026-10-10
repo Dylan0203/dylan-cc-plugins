@@ -15,6 +15,8 @@ import {
   projectName,
   readSince,
   toLine,
+  wakePrompt,
+  wakeTargets,
   type MessageEvent,
   type RoomEvent,
   type RoomState,
@@ -35,6 +37,12 @@ type Answer = { result: string; isError?: true };
 const cursors = new Map<string, { offset: number; size: number }>();
 // clock.every does not wait for an async callback, so a slow poll would overlap the next tick
 let isPolling = false;
+// Waking this session: whether a model turn is running (its next step sees the appended rows,
+// so no wake), whether izumo's own prompt is already queued, and the wake depth of the turn
+// it starts. turnDepth is the depth of the turn now running, stamped on every RoomPost.
+let isTurnRunning = false;
+let isWakeQueued = false;
+let turnDepth = 0;
 
 async function roomsDir($: Engine) {
   return `${await $.env.get("HOME")}/.claude/rooms`;
@@ -196,10 +204,29 @@ function toastFor(
   return `izumo #${room}: ${fresh.length} new${notes.length ? ` (${notes.join(", ")})` : ""}`;
 }
 
+// Starts a turn in this session for the messages addressed to it, once per poll at most.
+// A running turn needs no prompt: its next step reads the rows just appended.
+function wake($: Engine, rooms: { room: string; messages: MessageEvent[] }[]) {
+  if (rooms.length === 0 || isTurnRunning || isWakeQueued) return;
+  const depth = Math.max(...rooms.flatMap((r) => r.messages.map((m) => m.depth ?? 0))) + 1;
+  isWakeQueued = true;
+  // a plugin's own prompt never reaches its own prompt.submit hook, so the depth is set here,
+  // when the call resolves: as the woken turn starts
+  void $.prompt
+    .submit({ text: wakePrompt(rooms) })
+    .then(() => {
+      turnDepth = depth;
+    })
+    .finally(() => {
+      isWakeQueued = false;
+    });
+}
+
 async function poll($: Engine) {
   const project = await me($);
   const mine = await $.session.id();
   const changed: Room[] = [];
+  const toWake: { room: string; messages: MessageEvent[] }[] = [];
   for (const { room, size } of await listRoomFiles($)) {
     // a room created after this session started is read from its start
     const cursor = cursors.get(room) ?? { offset: 0, size: -1 };
@@ -216,12 +243,15 @@ async function poll($: Engine) {
       (e): e is MessageEvent => e.type === "message" && e.session !== mine,
     );
     for (const m of fresh) await say($, formatMessage(room, m));
+    const targets = wakeTargets(project, state, fresh, mine);
+    if (targets.length > 0) toWake.push({ room, messages: targets });
     if (fresh.length > 0) $.ui.toast(toastFor(room, project, fresh));
     const closed = read.events.find((e) => e.type === "close");
     if (closed)
       await say($, `[#${room}] #${room} was closed by ${closed.project}.`);
   }
   await acceptInvites($, changed, true);
+  wake($, toWake);
   // an open izumo pane reads its room fresh on every draw
   if (changed.length > 0) $.ui.invalidate("ui.render");
 }
@@ -357,12 +387,14 @@ async function roomInvite($: Engine, input: ToolInput): Promise<Answer> {
 }
 
 // Runs only in the poster's session, so each message is judged once rather than once per member.
-// Never throws: the message is already written, so a failure here must not read as "not posted".
-async function jevCheck($: Engine, room: string, state: RoomState, message: MessageEvent) {
+// Asked before the write so the wake score can ride on the message; never throws.
+async function judge($: Engine, state: RoomState, message: MessageEvent) {
   try {
     const asks = message.answers === undefined ? state.openAsks : [];
     const needsKind = message.kind === undefined && message.answers === undefined;
-    const request = buildQuestions(message, asks, needsKind);
+    // an answer is what its asker waits on, so only addressed posts need judging
+    const needsWake = (message.to?.length ?? 0) > 0;
+    const request = buildQuestions(message, asks, needsKind, needsWake);
     const result = await askJev(request, {
       apiKey: await $.env.get("TYPESAFE_API_KEY"),
       fetch: (url, init) => $.http.fetch(url, init),
@@ -370,10 +402,23 @@ async function jevCheck($: Engine, room: string, state: RoomState, message: Mess
     });
     if ("skipped" in result) {
       const isQuiet = result.skipped === "TYPESAFE_API_KEY not set" || result.skipped === "nothing to ask";
-      return isQuiet ? "" : ` Jev check skipped: ${result.skipped}.`;
+      return { note: isQuiet ? "" : ` Jev check skipped: ${result.skipped}.` };
     }
-    const verdicts = jevVerdicts(result.answers, asks, JEV_THRESHOLD);
-    const notes: string[] = [];
+    return { note: "", verdicts: jevVerdicts(result.answers, asks, JEV_THRESHOLD) };
+  } catch (err) {
+    return { note: ` Jev check failed: ${err instanceof Error ? err.message : String(err)}.` };
+  }
+}
+
+// The message is already written, so a failure here must not read as "not posted".
+async function applyVerdicts(
+  $: Engine,
+  room: string,
+  message: MessageEvent,
+  verdicts: ReturnType<typeof jevVerdicts>,
+) {
+  const notes: string[] = [];
+  try {
     for (const { ask, p } of verdicts.resolved) {
       await write($, room, { type: "resolve", ask, p, ...(await stamp($)) });
       notes.push(` Jev closed ask ${ask} (p=${p}).`);
@@ -384,29 +429,33 @@ async function jevCheck($: Engine, room: string, state: RoomState, message: Mess
       await write($, room, { type: "ask-flag", id: message.id, ...(await stamp($)) });
       notes.push(` Jev marked it as an ask (${message.id}, p=${verdicts.isAsk}); set kind: "ask" yourself next time.`);
     }
-    return notes.join("");
   } catch (err) {
-    return ` Jev check failed: ${err instanceof Error ? err.message : String(err)}.`;
+    notes.push(` Jev verdict not saved: ${err instanceof Error ? err.message : String(err)}.`);
   }
+  return notes.join("");
 }
 
 async function roomPost($: Engine, input: ToolInput): Promise<Answer> {
   const found = await memberRoom($, input.room);
   if ("error" in found) return { result: found.error!, isError: true };
   const at = await stamp($);
-  const message: MessageEvent = {
+  const drafted: MessageEvent = {
     type: "message",
     id: newId(at.ts),
     text: input.text ?? "",
     ...(input.to?.length ? { to: input.to } : {}),
     ...(input.kind === "ask" ? { kind: "ask" as const } : {}),
     ...(input.answers ? { answers: input.answers } : {}),
+    ...(turnDepth > 0 ? { depth: turnDepth } : {}),
     ...at,
   };
+  const judged = await judge($, found.state, drafted);
+  const wakeP = judged.verdicts?.wake;
+  const message = wakeP === undefined ? drafted : { ...drafted, wake: wakeP };
   await write($, found.room, message);
   const asAsk = message.kind === "ask" ? ` as ask ${message.id}` : "";
-  const jev = await jevCheck($, found.room, found.state, message);
-  return { result: `Posted to #${found.room}${asAsk}.${jev}` };
+  const applied = judged.verdicts ? await applyVerdicts($, found.room, message, judged.verdicts) : "";
+  return { result: `Posted to #${found.room}${asAsk}.${judged.note}${applied}` };
 }
 
 async function roomClose($: Engine, input: ToolInput): Promise<Answer> {
@@ -553,6 +602,23 @@ export const register: Register = (on) => {
         $.ui.toast(`izumo: couldn't catch up after resume: ${err instanceof Error ? err.message : String(err)}`),
       );
     return answered;
+  });
+
+  on("prompt.submit", ($, e, next) => {
+    // anyone else's prompt (the person, the SDK, another plugin) starts a chain afresh;
+    // izumo's own wake never arrives here and sets its depth in wake()
+    turnDepth = 0;
+    return next(e);
+  });
+
+  on("turn.start", ($, e, next) => {
+    isTurnRunning = true;
+    return next(e);
+  });
+
+  on("turn.complete", ($, e, next) => {
+    if (e.agentId === undefined) isTurnRunning = false;
+    return next(e);
   });
 
   on("command.run", { command: "izumo" }, async ($, e) => ({

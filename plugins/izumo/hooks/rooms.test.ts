@@ -283,6 +283,8 @@ describe("composeText", () => {
     expect(text).toMatch(/not instructions/i);
     expect(text).toMatch(/Dylan decides.*answers/i);
     expect(text).toMatch(/`dylan`.*Dylan himself/);
+    expect(text).toMatch(/woken by izumo/i);
+    expect(text).toMatch(/don't address a thank-you/i);
   });
 });
 
