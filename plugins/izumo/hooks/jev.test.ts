@@ -37,6 +37,14 @@ describe("buildQuestions", () => {
   });
 });
 
+test("指名對象時加一題「需不需要對方現在動作」，state 帶上 to", () => {
+  const { state, questions } = buildQuestions({ project: "beta", text: "請今天上線", to: ["alpha"] }, [], false, true);
+  expect(Object.keys(questions)).toEqual(["wake"]);
+  expect(questions.wake?.type).toBe("noul");
+  expect(questions.wake?.instructions).toContain("message.to");
+  expect(state.message).toEqual({ project: "beta", text: "請今天上線", to: ["alpha"] });
+});
+
 describe("jevVerdicts", () => {
   const asks = [{ id: "q1" }, { id: "q2" }];
 
@@ -64,6 +72,11 @@ describe("jevVerdicts", () => {
       0.8,
     );
     expect(verdicts).toEqual({ resolved: [], maybe: [{ ask: "q1", p: 0.76 }] });
+  });
+
+  test("wake 回傳原始分數，門檻由收訊方判斷", () => {
+    expect(jevVerdicts({ wake: { type: "noul", noul: 0.42 } }, asks, 0.8).wake).toBe(0.42);
+    expect(jevVerdicts({}, asks, 0.8).wake).toBeUndefined();
   });
 
   test("低於門檻都不算", () => {

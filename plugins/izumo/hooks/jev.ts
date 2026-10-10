@@ -17,12 +17,13 @@ export type JevFetch = (
   init: { method?: string; headers?: Record<string, string>; body?: string },
 ) => Promise<{ status: number; ok: boolean; text: string }>;
 
-type Said = { project: string; text: string };
+type Said = { project: string; text: string; to?: readonly string[] };
 
 export const buildQuestions = (
   message: Said,
   openAsks: readonly (Said & { id: string })[],
   needsKind: boolean,
+  needsWake = false,
 ) => {
   const questions: Record<string, JevQuestion> = {};
   openAsks.forEach((_, n) => {
@@ -37,9 +38,16 @@ export const buildQuestions = (
       instructions:
         "Is `message.text` asking another agent or Dylan for a reply or a decision that the writer is waiting on? A status update, an announcement or a rhetorical question does not count.",
     };
+  if (needsWake)
+    questions.wake = {
+      type: "noul",
+      instructions:
+        "Does `message.text` need the projects in `message.to` to do something or reply now? A status update, a thank-you, an acknowledgement or something they already know does not count.",
+    };
+  const { project, text, to } = message;
   return {
     state: {
-      message,
+      message: { project, text, ...(to?.length ? { to } : {}) },
       asks: openAsks.map(({ project, text }) => ({ project, text })),
     },
     questions,
@@ -62,9 +70,14 @@ export const jevVerdicts = (
   const resolved = scored.filter(({ p }) => p >= threshold);
   const maybe = scored.filter(({ p }) => p >= MAYBE && p < threshold);
   const isAsk = answers.isAsk?.noul;
-  return isAsk !== undefined && isAsk >= threshold
-    ? { resolved, maybe, isAsk }
-    : { resolved, maybe };
+  // left raw: the receiving session applies its own wake threshold
+  const wake = answers.wake?.noul;
+  return {
+    resolved,
+    maybe,
+    ...(isAsk !== undefined && isAsk >= threshold ? { isAsk } : {}),
+    ...(wake !== undefined ? { wake } : {}),
+  };
 };
 
 export async function askJev(
