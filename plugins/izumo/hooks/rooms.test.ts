@@ -411,9 +411,11 @@ describe("wakeTargets", () => {
     expect(targets(fresh({ to: ["skid"], depth: 2 }))).toEqual([]);
   });
 
-  test("Jev 的 wake 低於 0.8 不叫醒，沒有 wake 就照規則叫醒", () => {
-    expect(targets(fresh({ to: ["skid"], wake: 0.3 }))).toEqual([]);
-    expect(targets(fresh({ to: ["skid"], wake: 0.9 }))).toEqual(["n1"]);
+  test("Jev 判斷只是致謝或通知（fyi ≥ 0.7）才不叫醒，沒有分數就照規則叫醒", () => {
+    expect(targets(fresh({ to: ["skid"], fyi: 0.82 }))).toEqual([]);
+    expect(targets(fresh({ to: ["skid"], fyi: 0.06 }))).toEqual(["n1"]);
+    // unsure leans toward waking: the depth limit already guarantees the chain stops
+    expect(targets(fresh({ to: ["skid"], fyi: 0.5 }))).toEqual(["n1"]);
   });
 
   test("自己 session 發的不叫醒自己", () => {

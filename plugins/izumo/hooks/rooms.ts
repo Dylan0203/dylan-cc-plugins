@@ -12,8 +12,8 @@ export type MessageEvent = Base & {
   answers?: string;
   // how many izumo wakes deep the posting turn was: 0 for a person's turn
   depth?: number;
-  // Jev's judgement, made once by the poster, that the addressees need to act now
-  wake?: number;
+  // Jev's judgement, made once by the poster, that this is only a thank-you or an FYI
+  fyi?: number;
 };
 
 export type RoomEvent =
@@ -266,7 +266,9 @@ export const logText = (room: string, state: RoomState, count: number): string =
 // A wake chain stops here: Dylan -> A (depth 0) wakes A, A -> B (depth 1) wakes B,
 // B -> A (depth 2) waits for A's next step instead, so agents can't keep waking each other.
 const WAKE_MAX_DEPTH = 2;
-const WAKE_MIN_P = 0.8;
+// Only a confident "just FYI" skips the wake; unsure leans toward waking, since the
+// depth limit already guarantees the chain stops.
+const FYI_SKIP_P = 0.7;
 
 // The fresh messages that should start a turn in this project's session: addressed to it
 // (by `to`, or by answering one of its asks), shallow enough, and not judged FYI by Jev.
@@ -283,7 +285,7 @@ export const wakeTargets = (
       (m.to?.includes(project) ?? false) || (m.answers !== undefined && asker.get(m.answers) === project);
     if (!isAddressed) return false;
     if ((m.depth ?? 0) >= WAKE_MAX_DEPTH) return false;
-    return m.wake === undefined || m.wake >= WAKE_MIN_P;
+    return m.fyi === undefined || m.fyi < FYI_SKIP_P;
   });
 };
 
