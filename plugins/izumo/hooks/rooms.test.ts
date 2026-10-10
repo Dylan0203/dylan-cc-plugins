@@ -2,6 +2,8 @@ import { describe, expect, test } from "claude-code/testing";
 
 import {
   ago,
+  wakePrompt,
+  wakeTargets,
   catchUpText,
   projectColor,
   logText,
@@ -383,4 +385,46 @@ test("ago 用分、時、天表示經過時間", () => {
   expect(ago(5 * 60_000)).toBe("5m");
   expect(ago(2 * 60 * 60_000)).toBe("2h");
   expect(ago(3 * 24 * 60 * 60_000)).toBe("3d");
+});
+
+describe("wakeTargets", () => {
+  const ask = message({ id: "q1", kind: "ask", project: "skid", session: "s-skid", text: "TWD?" });
+  const state = foldRoom([create("kolnet"), join("kolnet"), join("skid"), ask]);
+  const fresh = (over: Partial<MessageEvent>) => message({ id: "n1", project: "kolnet", session: "s-kolnet", ...over });
+  const targets = (m: MessageEvent, mine = "s-skid") => wakeTargets("skid", state, [m], mine).map((t) => t.id);
+
+  test("to 指名這個專案就叫醒", () => {
+    expect(targets(fresh({ to: ["skid"] }))).toEqual(["n1"]);
+    expect(targets(fresh({ to: ["yeshealth"] }))).toEqual([]);
+    expect(targets(fresh({}))).toEqual([]);
+  });
+
+  test("回答這個專案提出的 ask 也算指名", () => {
+    expect(targets(fresh({ answers: "q1", project: "dylan", session: "dylan" }))).toEqual(["n1"]);
+    expect(wakeTargets("kolnet", state, [fresh({ answers: "q1", project: "dylan", session: "dylan" })], "s-k")).toEqual([]);
+  });
+
+  test("深度到 2 就不叫醒", () => {
+    expect(targets(fresh({ to: ["skid"], depth: 1 }))).toEqual(["n1"]);
+    expect(targets(fresh({ to: ["skid"], depth: 2 }))).toEqual([]);
+  });
+
+  test("Jev 的 wake 低於 0.8 不叫醒，沒有 wake 就照規則叫醒", () => {
+    expect(targets(fresh({ to: ["skid"], wake: 0.3 }))).toEqual([]);
+    expect(targets(fresh({ to: ["skid"], wake: 0.9 }))).toEqual(["n1"]);
+  });
+
+  test("自己 session 發的不叫醒自己", () => {
+    expect(targets(fresh({ to: ["skid"], session: "s-skid", project: "skid" }))).toEqual([]);
+  });
+});
+
+test("wakePrompt 說明哪個 room、幾則、誰發的，以及要做什麼", () => {
+  const text = wakePrompt([
+    { room: "payments", messages: [message({ project: "kolnet" }), message({ project: "dylan" })] },
+  ]);
+  expect(text).toContain("#payments");
+  expect(text).toContain("2 messages");
+  expect(text).toContain("kolnet, dylan");
+  expect(text).toContain("RoomPost");
 });

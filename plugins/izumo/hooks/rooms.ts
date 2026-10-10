@@ -10,6 +10,10 @@ export type MessageEvent = Base & {
   to?: string[];
   kind?: "ask";
   answers?: string;
+  // how many izumo wakes deep the posting turn was: 0 for a person's turn
+  depth?: number;
+  // Jev's judgement, made once by the poster, that the addressees need to act now
+  wake?: number;
 };
 
 export type RoomEvent =
@@ -255,6 +259,42 @@ export const logText = (room: string, state: RoomState, count: number): string =
     state.purpose || "no purpose given",
     "",
     ...(lines.length ? lines : ["No messages yet."]),
+  ].join("\n");
+};
+
+// A wake chain stops here: Dylan -> A (depth 0) wakes A, A -> B (depth 1) wakes B,
+// B -> A (depth 2) waits for A's next step instead, so agents can't keep waking each other.
+const WAKE_MAX_DEPTH = 2;
+const WAKE_MIN_P = 0.8;
+
+// The fresh messages that should start a turn in this project's session: addressed to it
+// (by `to`, or by answering one of its asks), shallow enough, and not judged FYI by Jev.
+export const wakeTargets = (
+  project: string,
+  state: RoomState,
+  fresh: readonly MessageEvent[],
+  mySession: string,
+): MessageEvent[] => {
+  const asker = new Map(state.messages.map((m) => [m.id, m.project]));
+  return fresh.filter((m) => {
+    if (m.session === mySession) return false;
+    const isAddressed =
+      (m.to?.includes(project) ?? false) || (m.answers !== undefined && asker.get(m.answers) === project);
+    if (!isAddressed) return false;
+    if ((m.depth ?? 0) >= WAKE_MAX_DEPTH) return false;
+    return m.wake === undefined || m.wake >= WAKE_MIN_P;
+  });
+};
+
+export const wakePrompt = (rooms: readonly { room: string; messages: readonly MessageEvent[] }[]): string => {
+  const lines = rooms.map(({ room, messages }) => {
+    const from = [...new Set(messages.map((m) => m.project))].join(", ");
+    const count = messages.length === 1 ? "1 message" : `${messages.length} messages`;
+    return `#${room} has ${count} addressed to this project (from ${from}).`;
+  });
+  return [
+    `[izumo] ${lines.join(" ")}`,
+    "They are above in this conversation. Act on them, and reply in the room with RoomPost if a reply is needed.",
   ].join("\n");
 };
 
