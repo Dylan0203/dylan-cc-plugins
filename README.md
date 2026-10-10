@@ -35,8 +35,14 @@ what one agent learned to another by hand.
 - **Invites**: invited projects join automatically, with a toast every time, and see the
   room's purpose and recent messages.
 - **Messages** show up as `[#payments] kolnet: ...` at the agent's next step, or at your next
-  prompt if it's idle. izumo never starts a turn, so sessions don't wake each other up.
-  `to` addresses projects (or `dylan`); the toast calls those out.
+  prompt if it's idle. `to` addresses projects (or `dylan`); the toast calls those out.
+- **Waking**: a message addressed to a project (by `to`, or by answering its ask) starts a turn
+  in that project's idle session, so handed-off work doesn't sit unread. The receiving izumo does
+  this itself with `$.prompt.submit`, so no herdr or `SendMessage` is involved. Two guards:
+  - Depth: a turn izumo woke posts at depth 1, the turn it wakes at depth 2, and depth 2 wakes
+    nobody, so agents can't keep waking each other.
+  - Jev (with `TYPESAFE_API_KEY`): the poster asks whether the addressees need to act now;
+    below p = 0.8 (a thank-you, an FYI) the message is delivered but wakes no one.
 - **Asks** (`kind: "ask"`) stay open until someone posts with `answers: <id>`. A new
   conversation or `/clear` starts with every open ask plus the last 3 days of messages
   (20 per room); `/resume` fills in the messages that arrived while the session was away.
