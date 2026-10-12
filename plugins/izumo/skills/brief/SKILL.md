@@ -83,7 +83,7 @@ quiet gets one line saying so.
 ```
 📥 Rooms and sessions
    #payments · kolnet, skid
-     · the GlitchTip issue moved: it is #7317 / #7587 now, 46 events between them
+     · the failing check was the lockfile format, not the network; retry no longer needed
    skid · idle
      · added the --immutable check CI actually runs; it was missing before
 ```
