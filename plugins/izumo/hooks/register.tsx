@@ -389,8 +389,8 @@ async function judge($: Engine, state: RoomState, message: MessageEvent) {
   try {
     const asks = message.answers === undefined ? state.openAsks : [];
     const needsKind = message.kind === undefined && message.answers === undefined;
-    // an answer is what its asker waits on, so only addressed posts need judging
-    const needsWake = (message.to?.length ?? 0) > 0;
+    // an answer is what its asker waits on, so it always wakes and needs no judging
+    const needsWake = (message.to?.length ?? 0) > 0 && message.answers === undefined;
     const request = buildQuestions(message, asks, needsKind, needsWake);
     const result = await askJev(request, {
       apiKey: await $.env.get("TYPESAFE_API_KEY"),

@@ -884,4 +884,15 @@ describe("叫醒", () => {
     expect(Object.keys(host.jev.calls[0]!.questions)).toEqual(["isAsk", "fyi"]);
     expect(host.events("payments").at(-1)).toEqual(expect.objectContaining({ text: "謝謝", fyi: 0.83 }));
   });
+
+  test("回答 ask 的 RoomPost 不問 fyi，提問方一定被叫醒", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.say("payments", "幣別要用哪個？", { id: "q1", project: "kolnet", session: "s-k", kind: "ask" });
+    host.env.TYPESAFE_API_KEY = "k";
+    host.jev.answer = () => ({});
+    await boot($);
+    await tool($, "RoomPost", { room: "payments", text: "用 TWD", to: ["kolnet"], answers: "q1" });
+    expect(Object.keys(host.jev.calls[0]?.questions ?? {})).not.toContain("fyi");
+  });
 });
