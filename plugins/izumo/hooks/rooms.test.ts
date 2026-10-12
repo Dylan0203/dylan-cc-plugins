@@ -411,11 +411,12 @@ describe("wakeTargets", () => {
     expect(targets(fresh({ to: ["skid"], depth: 2 }))).toEqual([]);
   });
 
-  test("Jev 判斷只是致謝或通知（fyi ≥ 0.7）才不叫醒，沒有分數就照規則叫醒", () => {
+  test("Jev 判斷只是致謝或通知（fyi ≥ 0.4）才不叫醒，沒有分數就照規則叫醒", () => {
     expect(targets(fresh({ to: ["skid"], fyi: 0.82 }))).toEqual([]);
+    // a bare "Thanks, beta!" scored 0.43 live; real requests stayed at or below 0.06
+    expect(targets(fresh({ to: ["skid"], fyi: 0.43 }))).toEqual([]);
     expect(targets(fresh({ to: ["skid"], fyi: 0.06 }))).toEqual(["n1"]);
-    // unsure leans toward waking: the depth limit already guarantees the chain stops
-    expect(targets(fresh({ to: ["skid"], fyi: 0.5 }))).toEqual(["n1"]);
+    expect(targets(fresh({ to: ["skid"], fyi: 0.3 }))).toEqual(["n1"]);
   });
 
   test("自己 session 發的不叫醒自己", () => {

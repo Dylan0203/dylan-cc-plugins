@@ -266,9 +266,9 @@ export const logText = (room: string, state: RoomState, count: number): string =
 // A wake chain stops here: Dylan -> A (depth 0) wakes A, A -> B (depth 1) wakes B,
 // B -> A (depth 2) waits for A's next step instead, so agents can't keep waking each other.
 const WAKE_MAX_DEPTH = 2;
-// Only a confident "just FYI" skips the wake; unsure leans toward waking, since the
-// depth limit already guarantees the chain stops.
-const FYI_SKIP_P = 0.7;
+// Live scores: real requests stayed at or below 0.06, while thank-yous ranged 0.43-0.83,
+// so even a lukewarm "just FYI" skips the wake.
+const FYI_SKIP_P = 0.4;
 
 // The fresh messages that should start a turn in this project's session: addressed to it
 // (by `to`, or by answering one of its asks), shallow enough, and not judged FYI by Jev.
