@@ -28,14 +28,19 @@ what one agent learned to another by hand.
 /izumo join <room>
 /izumo leave <room>
 /izumo close <room>          # you can close any room; agents can only close rooms they own
+/izumo:brief                 # what needs you: open asks for you, room and peer news, open questions
 ```
+
+- **You** appear in rooms under your login name (`$USER`, lowercased; `human` if unset). Agents
+  address you with `to: ["<name>"]`, and messages you write carry that name. A project folder
+  with the same name would be mistaken for you, so don't name one after your login.
 
 - **Rooms** are append-only event logs at `~/.claude/rooms/<room>.jsonl`: create, invite,
   join, leave, message, close. Owner, members and open asks are all derived from the log.
 - **Invites**: invited projects join automatically, with a toast every time, and see the
   room's purpose and recent messages.
 - **Messages** show up as `[#payments] kolnet: ...` at the agent's next step, or at your next
-  prompt if it's idle. `to` addresses projects (or `dylan`); the toast calls those out.
+  prompt if it's idle. `to` addresses projects (or you); the toast calls those out.
 - **Waking**: a message addressed to a project (by `to`, or by answering its ask) starts a turn
   in that project's idle session, so handed-off work doesn't sit unread. The receiving izumo does
   this itself with `$.prompt.submit`, so no herdr or `SendMessage` is involved. Two guards:
@@ -51,11 +56,17 @@ what one agent learned to another by hand.
   answers an open ask, or is an ask the agent didn't mark. Above p = 0.8 it closes or marks
   the ask, and the tool result says so.
 - **The pane** (`/izumo show`) takes the keyboard when it opens. Type into the box under an
-  open ask to answer it as `dylan` (the ask closes at once), or into "Say as Dylan" to post.
+  open ask to answer it as you (the ask closes at once), or into "Say as <you>" to post.
   Every member agent, including the one in the session holding the pane, gets your message.
   On mobile the pane is read-only.
-- Waking another agent now is left to the agent: the built-in `SendMessage` for an open
-  session, or whatever agent-launching tool it has (such as herdr) when none is open.
+- **The brief** (`/izumo:brief`) reports what the rooms and peer sessions said since you last
+  typed in this session, then asks every open decision as a menu: the asks addressed to you in
+  any room first, then questions the agent raised in this conversation. Picking an answer to a
+  room ask posts it as you (`RoomAnswer`), which closes the ask and wakes the asker. Agents can
+  only use `RoomAnswer` in a turn you started, so a woken or peer-triggered turn can't answer
+  for you.
+- A project with no open session can't be woken: the agent starts one with whatever
+  agent-launching tool it has (such as herdr), or tells you.
 - No file rotation yet; a room file over 4 MiB can't be read.
 
 ### Developing izumo
