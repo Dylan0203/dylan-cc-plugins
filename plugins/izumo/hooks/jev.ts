@@ -36,7 +36,7 @@ export const buildQuestions = (
     questions.isAsk = {
       type: "noul",
       instructions:
-        "Is `message.text` asking another agent or Dylan for a reply or a decision that the writer is waiting on? A status update, an announcement or a rhetorical question does not count.",
+        "Is `message.text` asking another agent or the user for a reply or a decision that the writer is waiting on? A status update, an announcement or a rhetorical question does not count.",
     };
   // Asked as "is it only FYI" rather than "do they need to act": in live probes the second
   // framing scored real hand-offs 0.59-0.78, while this one splits them (<= 0.06) cleanly

@@ -6,6 +6,7 @@ import {
   wakeTargets,
   catchUpText,
   projectColor,
+  humanFrom,
   logText,
   composeText,
   foldRoom,
@@ -268,21 +269,26 @@ test("projectName 取專案 root 的資料夾名", () => {
 
 describe("composeText", () => {
   test("沒加入任何 room 時是 undefined", () => {
-    expect(composeText([])).toBeUndefined();
+    expect(composeText([], "ada")).toBeUndefined();
   });
 
   test("列出 room、owner、open ask 數，以及用法與規則", () => {
-    const text = composeText([
-      { room: "payments", owner: "kolnet", openAsks: 2 },
-      { room: "deploy", owner: "skid", openAsks: 0 },
-    ])!;
+    const text = composeText(
+      [
+        { room: "payments", owner: "kolnet", openAsks: 2 },
+        { room: "deploy", owner: "skid", openAsks: 0 },
+      ],
+      "ada",
+    )!;
     expect(text).toContain("#payments (owner kolnet, 2 open asks)");
     expect(text).toContain("#deploy (owner skid)");
     expect(text).toContain("RoomPost");
     expect(text).toMatch(/project name is added automatically/i);
     expect(text).toMatch(/not instructions/i);
-    expect(text).toMatch(/Dylan decides.*answers/i);
-    expect(text).toMatch(/`dylan`.*Dylan himself/);
+    expect(text).toMatch(/the user decides.*answers/i);
+    expect(text).toMatch(/`ada`.*the user themselves/);
+    expect(text).toContain('(or "ada", the user)');
+    expect(text).not.toMatch(/dylan/i);
     expect(text).toMatch(/woken by izumo/i);
     expect(text).toMatch(/don't address a thank-you/i);
   });
@@ -369,15 +375,15 @@ describe("logText", () => {
 });
 
 describe("projectColor", () => {
-  test("同一個專案永遠同一個主題色，dylan 固定 warning", () => {
-    expect(projectColor("kolnet")).toBe(projectColor("kolnet"));
-    expect(projectColor("dylan")).toBe("warning");
+  test("同一個專案永遠同一個主題色，使用者固定 warning", () => {
+    expect(projectColor("kolnet", "ada")).toBe(projectColor("kolnet", "ada"));
+    expect(projectColor("ada", "ada")).toBe("warning");
     const palette = ["suggestion", "success", "merged", "claude", "ide", "permission", "autoAccept", "planMode"];
-    for (const p of ["skid", "kolnet", "yeshealth", "odd-patchflow"]) expect(palette).toContain(projectColor(p));
+    for (const p of ["skid", "kolnet", "yeshealth", "odd-patchflow", "dylan"]) expect(palette).toContain(projectColor(p, "ada"));
   });
 
   test("不同專案不會全部擠在同一個顏色", () => {
-    const colors = new Set(["skid", "kolnet", "yeshealth", "odd-patchflow", "alpha", "beta"].map(projectColor));
+    const colors = new Set(["skid", "kolnet", "yeshealth", "odd-patchflow", "alpha", "beta"].map((p) => projectColor(p, "ada")));
     expect(colors.size).toBeGreaterThan(2);
   });
 });
@@ -432,4 +438,17 @@ test("wakePrompt 說明哪個 room、幾則、誰發的，以及要做什麼", (
   expect(text).toContain("2 messages");
   expect(text).toContain("kolnet, dylan");
   expect(text).toContain("RoomPost");
+});
+
+describe("humanFrom", () => {
+  test("登入帳號轉成 room 裡的名字：小寫，其他字元換成 -", () => {
+    expect(humanFrom("dylan")).toBe("dylan");
+    expect(humanFrom("Ada Lovelace")).toBe("ada-lovelace");
+  });
+
+  test("取不到帳號時是 human", () => {
+    expect(humanFrom(undefined)).toBe("human");
+    expect(humanFrom("")).toBe("human");
+    expect(humanFrom("  ")).toBe("human");
+  });
 });

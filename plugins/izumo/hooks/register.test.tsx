@@ -1,7 +1,13 @@
 import type { On } from "claude-code";
 import { describe, expect, mock, test, type Engine } from "claude-code/testing";
 
-import { foldRoom, parseEvents, projectColor, toLine, type RoomEvent } from "./rooms";
+import {
+  foldRoom,
+  parseEvents,
+  projectColor,
+  toLine,
+  type RoomEvent,
+} from "./rooms";
 
 // the test runtime has real timers; the hooks lib types leave them out
 declare const setTimeout: (callback: () => void, ms: number) => unknown;
@@ -29,11 +35,13 @@ const fakeHost = (on: On) => {
   // real milliseconds each fs.read takes, so a test can make a poll outlast the next tick
   const slow = { readMs: 0 };
 
-  const env: Record<string, string> = { HOME };
+  const env: Record<string, string> = { HOME, USER: "dylan" };
   // what Jev answers: each request's parsed body in, the answers map out (undefined = HTTP 500)
   const jev = {
     calls: [] as { questions: Record<string, { instructions: string }> }[],
-    answer: (_body: unknown): Record<string, { type: string; noul: number }> | undefined => ({}),
+    answer: (
+      _body: unknown,
+    ): Record<string, { type: string; noul: number }> | undefined => ({}),
   };
 
   on("env.get", (_$, e) => ({ value: env[e.name] }) as never);
@@ -119,7 +127,13 @@ const fakeHost = (on: On) => {
   on("session.start", (_$, e) => e as never);
   // the transcript as $.session.messages() reads it: izumo's own rows included
   const transcript: string[] = [];
-  on("session.messages", () => ({ value: transcript.map((text) => ({ role: "user", text, toolUses: [] })) }) as never);
+  on(
+    "session.messages",
+    () =>
+      ({
+        value: transcript.map((text) => ({ role: "user", text, toolUses: [] })),
+      }) as never,
+  );
   on("classic.SessionStart", () => ({}) as never);
 
   const write = (room: string, event: RoomEvent) =>
@@ -314,10 +328,16 @@ describe("RoomPost 與 Jev", () => {
     withAsk(host);
     host.jev.answer = () => ({ answers_0: noul(0.92), isAsk: noul(0.1) });
     await boot($);
-    const result = await tool($, "RoomPost", { room: "payments", text: "用 TWD" });
+    const result = await tool($, "RoomPost", {
+      room: "payments",
+      text: "用 TWD",
+    });
 
     expect(host.jev.calls).toHaveLength(1);
-    expect(Object.keys(host.jev.calls[0]!.questions)).toEqual(["answers_0", "isAsk"]);
+    expect(Object.keys(host.jev.calls[0]!.questions)).toEqual([
+      "answers_0",
+      "isAsk",
+    ]);
     expect(host.events("payments").at(-1)).toEqual(
       expect.objectContaining({ type: "resolve", ask: "q1", p: 0.92 }),
     );
@@ -331,7 +351,10 @@ describe("RoomPost 與 Jev", () => {
     host.env.TYPESAFE_API_KEY = "k";
     host.jev.answer = () => ({ isAsk: noul(0.88) });
     await boot($);
-    const result = await tool($, "RoomPost", { room: "payments", text: "staging 可以重開嗎？" });
+    const result = await tool($, "RoomPost", {
+      room: "payments",
+      text: "staging 可以重開嗎？",
+    });
     const open = host.state("payments").openAsks;
     expect(open).toHaveLength(1);
     expect(open[0]?.text).toBe("staging 可以重開嗎？");
@@ -353,16 +376,25 @@ describe("RoomPost 與 Jev", () => {
     withAsk(host);
     host.jev.answer = () => ({ answers_0: noul(0.76), isAsk: noul(0.1) });
     await boot($);
-    const result = await tool($, "RoomPost", { room: "payments", text: "用 TWD 吧" });
+    const result = await tool($, "RoomPost", {
+      room: "payments",
+      text: "用 TWD 吧",
+    });
     expect(host.state("payments").openAsks.map((m) => m.id)).toEqual(["q1"]);
-    expect(String(result.result)).toMatch(/may answer ask q1 \(p=0\.76\).*answers: "q1"/);
+    expect(String(result.result)).toMatch(
+      /may answer ask q1 \(p=0\.76\).*answers: "q1"/,
+    );
   });
 
   test("已經填了 answers 就不問 Jev", async ($, on) => {
     const host = await start($, on);
     withAsk(host);
     await boot($);
-    await tool($, "RoomPost", { room: "payments", text: "用 TWD", answers: "q1" });
+    await tool($, "RoomPost", {
+      room: "payments",
+      text: "用 TWD",
+      answers: "q1",
+    });
     expect(host.jev.calls).toHaveLength(0);
     expect(host.state("payments").openAsks).toEqual([]);
   });
@@ -371,7 +403,9 @@ describe("RoomPost 與 Jev", () => {
     const host = await start($, on);
     host.seedRoom("payments");
     await boot($);
-    expect((await tool($, "RoomPost", { room: "payments", text: "a" })).isError).not.toBe(true);
+    expect(
+      (await tool($, "RoomPost", { room: "payments", text: "a" })).isError,
+    ).not.toBe(true);
     expect(host.jev.calls).toHaveLength(0);
 
     host.env.TYPESAFE_API_KEY = "k";
@@ -379,7 +413,9 @@ describe("RoomPost 與 Jev", () => {
     const result = await tool($, "RoomPost", { room: "payments", text: "b" });
     expect(result.isError).not.toBe(true);
     expect(String(result.result)).toMatch(/Posted/);
-    expect(host.events("payments").filter((e) => e.type === "message")).toHaveLength(2);
+    expect(
+      host.events("payments").filter((e) => e.type === "message"),
+    ).toHaveLength(2);
   });
 });
 
@@ -568,6 +604,17 @@ describe("投遞", () => {
     expect(host.toasts.join("\n")).toMatch(/kolnet → you/);
   });
 
+  test("給使用者的 ask，toast 標出使用者的名字", async ($, on) => {
+    const host = await start($, on);
+    host.env.USER = "ada";
+    host.seedRoom("payments");
+    await boot($);
+    host.say("payments", "要用 TWD 嗎？", { kind: "ask", to: ["ada"] });
+    await host.clock.advance(5000);
+    expect(await eventually(() => host.toasts.length > 0)).toBe(true);
+    expect(host.toasts.join("\n")).toMatch(/ask for ada/);
+  });
+
   test("room 被關閉時成員會收到通知", async ($, on) => {
     const host = await start($, on);
     host.seedRoom("payments");
@@ -666,12 +713,23 @@ describe("/resume", () => {
     host.say("payments", "before leaving", { id: "a", ts: now - 5 * MINUTE });
     host.say("payments", "while away 1", { id: "b", ts: now - 2 * MINUTE });
     host.say("payments", "while away 2", { id: "c", ts: now - MINUTE });
-    host.say("payments", "mine while away", { id: "d", ts: now - MINUTE, project: "skid", session: "s-me" });
+    host.say("payments", "mine while away", {
+      id: "d",
+      ts: now - MINUTE,
+      project: "skid",
+      session: "s-me",
+    });
     host.say("payments", "already seen", { id: "e", ts: now - MINUTE });
     host.transcript.push("[#payments] kolnet: already seen");
 
-    await $.classic.SessionStart({ source: "resume", seconds_since_last_response: 180 } as never);
-    expect(host.appended).toEqual(["[#payments] kolnet: while away 1", "[#payments] kolnet: while away 2"]);
+    await $.classic.SessionStart({
+      source: "resume",
+      seconds_since_last_response: 180,
+    } as never);
+    expect(host.appended).toEqual([
+      "[#payments] kolnet: while away 1",
+      "[#payments] kolnet: while away 2",
+    ]);
 
     // the poll that follows must not deliver them again
     await host.clock.advance(5000);
@@ -692,8 +750,13 @@ describe("/resume", () => {
 // every Markdown body in a drawn tree, in document order
 const markdownTexts = (node: unknown): string[] => {
   if (typeof node !== "object" || node === null) return [];
-  const { type, props, children } = node as { type?: string; props?: { text?: string }; children?: unknown[] };
-  const own = type === "Markdown" && typeof props?.text === "string" ? [props.text] : [];
+  const { type, props, children } = node as {
+    type?: string;
+    props?: { text?: string };
+    children?: unknown[];
+  };
+  const own =
+    type === "Markdown" && typeof props?.text === "string" ? [props.text] : [];
   return [...own, ...(children ?? []).flatMap(markdownTexts)];
 };
 
@@ -726,33 +789,60 @@ describe("/izumo show", () => {
     test(`pane 顯示 room，並能以 Dylan 回答 ask 與發言（${surface}）`, async ($, on) => {
       const host = await start($, on);
       host.seedRoom("payments");
-      host.say("payments", "要用 TWD 嗎？", { id: "q1", kind: "ask", to: ["dylan"] });
+      host.say("payments", "要用 TWD 嗎？", {
+        id: "q1",
+        kind: "ask",
+        to: ["dylan"],
+      });
       host.say("payments", "- staging 已更新\n- 跑 `db:migrate`");
       await boot($);
 
-      const ui = await $.ui.mount({ plugin: "izumo", surface, ...pane("payments") });
+      const ui = await $.ui.mount({
+        plugin: "izumo",
+        surface,
+        ...pane("payments"),
+      });
       expect(await ui.find({ text: /^#payments$/ })).toBeDefined();
-      expect(await ui.find({ text: /owner kolnet · kolnet, skid/ })).toBeDefined();
+      expect(
+        await ui.find({ text: /owner kolnet · kolnet, skid/ }),
+      ).toBeDefined();
       expect(await ui.find({ text: /coordinate payments/ })).toBeDefined();
 
       // each message: a header with the project in its own color, then the body as Markdown
-      expect((await ui.find({ type: "Text", text: /^kolnet$/ }))?.props.color).toBe(projectColor("kolnet"));
-      expect((await ui.find({ type: "Text", text: /ask q1/ }))?.props.color).toBe("warning");
+      expect(
+        (await ui.find({ type: "Text", text: /^kolnet$/ }))?.props.color,
+      ).toBe(projectColor("kolnet", "dylan"));
+      expect(
+        (await ui.find({ type: "Text", text: /ask q1/ }))?.props.color,
+      ).toBe("warning");
       expect(await ui.find({ text: /→ dylan/ })).toBeDefined();
-      expect(markdownTexts(await ui.drawn())).toEqual(["要用 TWD 嗎？", "- staging 已更新\n- 跑 `db:migrate`"]);
+      expect(markdownTexts(await ui.drawn())).toEqual([
+        "要用 TWD 嗎？",
+        "- staging 已更新\n- 跑 `db:migrate`",
+      ]);
       expect((await ui.find({ key: "asks" }))?.props.borderStyle).toBeDefined();
       expect((await ui.find({ key: "answer-q1" }))?.props.autoFocus).toBe(true);
 
       await ui.input({ key: "answer-q1", text: "用 TWD" });
       expect(host.events("payments").at(-1)).toEqual(
-        expect.objectContaining({ type: "message", project: "dylan", session: "dylan", answers: "q1", text: "用 TWD" }),
+        expect.objectContaining({
+          type: "message",
+          project: "dylan",
+          session: "dylan",
+          answers: "q1",
+          text: "用 TWD",
+        }),
       );
       expect(host.state("payments").openAsks).toEqual([]);
       await ui.redraw();
       expect(await ui.find({ key: "answer-q1" })).toBeUndefined();
       expect(await ui.find({ key: "asks" })).toBeUndefined();
-      expect((await ui.find({ type: "Text", text: /^dylan$/ }))?.props.color).toBe("warning");
-      expect((await ui.find({ type: "Text", text: /re q1/ }))?.props.color).toBe("success");
+      expect(
+        (await ui.find({ type: "Text", text: /^dylan$/ }))?.props.color,
+      ).toBe("warning");
+      expect(
+        (await ui.find({ type: "Text", text: /re q1/ }))?.props.color,
+      ).toBe("success");
 
       await ui.input({ key: "say", text: "週五上線" });
       expect(host.events("payments").at(-1)).toEqual(
@@ -762,11 +852,49 @@ describe("/izumo show", () => {
     });
   }
 
+  test("pane 以 $USER 的名字發言；取不到時是 human", async ($, on) => {
+    const host = await start($, on);
+    host.env.USER = "Ada";
+    host.seedRoom("payments");
+    host.say("payments", "要用 TWD 嗎？", {
+      id: "q1",
+      kind: "ask",
+      to: ["ada"],
+    });
+    await boot($);
+    const ui = await $.ui.mount({
+      plugin: "izumo",
+      surface: "terminal",
+      ...pane("payments"),
+    });
+    expect((await ui.find({ key: "answer-q1" }))?.props.placeholder).toBe(
+      "Answer as ada",
+    );
+    await ui.input({ key: "answer-q1", text: "用 TWD" });
+    expect(host.events("payments").at(-1)).toEqual(
+      expect.objectContaining({
+        project: "ada",
+        session: "ada",
+        answers: "q1",
+      }),
+    );
+    delete host.env.USER;
+    await ui.input({ key: "say", text: "週五上線" });
+    expect(host.events("payments").at(-1)).toEqual(
+      expect.objectContaining({ project: "human", text: "週五上線" }),
+    );
+    await ui.unmount();
+  });
+
   test("Dylan 的訊息會投遞給成員，包括開著 pane 的這個 session", async ($, on) => {
     const host = await start($, on);
     host.seedRoom("payments");
     await boot($);
-    const ui = await $.ui.mount({ plugin: "izumo", surface: "terminal", ...pane("payments") });
+    const ui = await $.ui.mount({
+      plugin: "izumo",
+      surface: "terminal",
+      ...pane("payments"),
+    });
     await ui.input({ key: "say", text: "週五上線" });
     await host.clock.advance(5000);
     expect(await eventually(() => host.appended.length > 0)).toBe(true);
@@ -779,7 +907,11 @@ describe("/izumo show", () => {
     host.seedRoom("payments");
     host.say("payments", "要用 TWD 嗎？", { id: "q1", kind: "ask" });
     await boot($);
-    const ui = await $.ui.mount({ plugin: "izumo", surface: "mobile", ...pane("payments") });
+    const ui = await $.ui.mount({
+      plugin: "izumo",
+      surface: "mobile",
+      ...pane("payments"),
+    });
     expect(markdownTexts(await ui.drawn())).toEqual(["要用 TWD 嗎？"]);
     expect(await ui.find({ key: "answer-q1" })).toBeUndefined();
     expect(await ui.find({ key: "say" })).toBeUndefined();
@@ -789,9 +921,18 @@ describe("/izumo show", () => {
   test("關閉的 room 沒有輸入框", async ($, on) => {
     const host = await start($, on);
     host.seedRoom("payments");
-    host.write("payments", { type: "close", ts: 3, project: "kolnet", session: "s-k" });
+    host.write("payments", {
+      type: "close",
+      ts: 3,
+      project: "kolnet",
+      session: "s-k",
+    });
     await boot($);
-    const ui = await $.ui.mount({ plugin: "izumo", surface: "terminal", ...pane("payments") });
+    const ui = await $.ui.mount({
+      plugin: "izumo",
+      surface: "terminal",
+      ...pane("payments"),
+    });
     expect(await ui.find({ text: /closed/ })).toBeDefined();
     expect(await ui.find({ key: "say" })).toBeUndefined();
     await ui.unmount();
@@ -799,7 +940,9 @@ describe("/izumo show", () => {
 });
 
 describe("叫醒", () => {
-  const tick = async (host: { clock: { advance: (ms: number) => Promise<void> } }) => {
+  const tick = async (host: {
+    clock: { advance: (ms: number) => Promise<void> };
+  }) => {
     await host.clock.advance(5000);
     await settle();
   };
@@ -814,7 +957,9 @@ describe("叫醒", () => {
     expect(await eventually(() => host.submitted.length > 0)).toBe(true);
     await settle();
     expect(host.submitted).toHaveLength(1);
-    expect(host.submitted[0]).toContain("#payments has 2 messages addressed to this project (from kolnet)");
+    expect(host.submitted[0]).toContain(
+      "#payments has 2 messages addressed to this project (from kolnet)",
+    );
   });
 
   test("沒指名、深度到 2、Jev 判斷只是致謝的都不叫醒，但訊息照樣送進對話", async ($, on) => {
@@ -848,9 +993,18 @@ describe("叫醒", () => {
   test("Dylan 在 pane 回答這個專案的 ask，會叫醒它", async ($, on) => {
     const host = await start($, on);
     host.seedRoom("payments");
-    host.say("payments", "TWD?", { id: "q1", kind: "ask", project: "skid", session: "s-old" });
+    host.say("payments", "TWD?", {
+      id: "q1",
+      kind: "ask",
+      project: "skid",
+      session: "s-old",
+    });
     await boot($);
-    const ui = await $.ui.mount({ plugin: "izumo", surface: "terminal", ...pane("payments") });
+    const ui = await $.ui.mount({
+      plugin: "izumo",
+      surface: "terminal",
+      ...pane("payments"),
+    });
     await ui.input({ key: "answer-q1", text: "用 TWD" });
     await ui.unmount();
     await host.clock.advance(5000);
@@ -865,10 +1019,20 @@ describe("叫醒", () => {
     host.say("payments", "請回報", { id: "a", to: ["skid"] });
     await host.clock.advance(5000);
     expect(await eventually(() => host.submitted.length > 0)).toBe(true);
-    await tool($, "RoomPost", { room: "payments", text: "好了", to: ["kolnet"] });
-    expect(host.events("payments").at(-1)).toEqual(expect.objectContaining({ text: "好了", depth: 1 }));
+    await tool($, "RoomPost", {
+      room: "payments",
+      text: "好了",
+      to: ["kolnet"],
+    });
+    expect(host.events("payments").at(-1)).toEqual(
+      expect.objectContaining({ text: "好了", depth: 1 }),
+    );
 
-    await $.prompt.submit({ text: "Dylan types something", wait: false, origin: { kind: "composer" } } as never);
+    await $.prompt.submit({
+      text: "Dylan types something",
+      wait: false,
+      origin: { kind: "composer" },
+    } as never);
     await tool($, "RoomPost", { room: "payments", text: "再補一句" });
     const last = host.events("payments").at(-1) as { depth?: number };
     expect(last.depth).toBeUndefined();
@@ -878,21 +1042,42 @@ describe("叫醒", () => {
     const host = await start($, on);
     host.seedRoom("payments");
     host.env.TYPESAFE_API_KEY = "k";
-    host.jev.answer = () => ({ fyi: { type: "noul", noul: 0.83 }, isAsk: { type: "noul", noul: 0.1 } });
+    host.jev.answer = () => ({
+      fyi: { type: "noul", noul: 0.83 },
+      isAsk: { type: "noul", noul: 0.1 },
+    });
     await boot($);
-    await tool($, "RoomPost", { room: "payments", text: "謝謝", to: ["kolnet"] });
+    await tool($, "RoomPost", {
+      room: "payments",
+      text: "謝謝",
+      to: ["kolnet"],
+    });
     expect(Object.keys(host.jev.calls[0]!.questions)).toEqual(["isAsk", "fyi"]);
-    expect(host.events("payments").at(-1)).toEqual(expect.objectContaining({ text: "謝謝", fyi: 0.83 }));
+    expect(host.events("payments").at(-1)).toEqual(
+      expect.objectContaining({ text: "謝謝", fyi: 0.83 }),
+    );
   });
 
   test("回答 ask 的 RoomPost 不問 fyi，提問方一定被叫醒", async ($, on) => {
     const host = await start($, on);
     host.seedRoom("payments");
-    host.say("payments", "幣別要用哪個？", { id: "q1", project: "kolnet", session: "s-k", kind: "ask" });
+    host.say("payments", "幣別要用哪個？", {
+      id: "q1",
+      project: "kolnet",
+      session: "s-k",
+      kind: "ask",
+    });
     host.env.TYPESAFE_API_KEY = "k";
     host.jev.answer = () => ({});
     await boot($);
-    await tool($, "RoomPost", { room: "payments", text: "用 TWD", to: ["kolnet"], answers: "q1" });
-    expect(Object.keys(host.jev.calls[0]?.questions ?? {})).not.toContain("fyi");
+    await tool($, "RoomPost", {
+      room: "payments",
+      text: "用 TWD",
+      to: ["kolnet"],
+      answers: "q1",
+    });
+    expect(Object.keys(host.jev.calls[0]?.questions ?? {})).not.toContain(
+      "fyi",
+    );
   });
 });

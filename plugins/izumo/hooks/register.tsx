@@ -5,6 +5,7 @@ import {
   composeText,
   foldRoom,
   ago,
+  humanFrom,
   formatMessage,
   isRoomName,
   logText,
@@ -40,6 +41,10 @@ let isPolling = false;
 let isTurnRunning = false;
 let isWakeQueued = false;
 let turnDepth = 0;
+
+async function humanName($: Engine) {
+  return humanFrom(await $.env.get("USER"));
+}
 
 async function roomsDir($: Engine) {
   return `${await $.env.get("HOME")}/.claude/rooms`;
@@ -117,11 +122,11 @@ type CardElements = Pick<Elements["terminal"], "Box" | "Text" | "Markdown">;
 
 // One message as the pane draws it: a header (who, to whom, ask or reply, how long ago)
 // and the body as Markdown, since agents write lists and code spans.
-function messageCard({ Box, Text, Markdown }: CardElements, m: MessageEvent, now: number) {
+function messageCard({ Box, Text, Markdown }: CardElements, m: MessageEvent, now: number, human: string) {
   return (
     <Box flexDirection="column">
       <Box flexDirection="row" gap={1}>
-        <Text bold color={projectColor(m.project)}>
+        <Text bold color={projectColor(m.project, human)}>
           {m.project}
         </Text>
         {m.to?.length ? <Text dimColor>→ {m.to.join(", ")}</Text> : null}
@@ -136,20 +141,21 @@ function messageCard({ Box, Text, Markdown }: CardElements, m: MessageEvent, now
   );
 }
 
-// Dylan writes from the pane as himself: session "dylan" matches no agent's session, so every
-// member's poll delivers it, the session that holds the pane included.
-async function postAsDylan($: Engine, room: string, text: string, answers?: string) {
+// The user writes as themselves: a session named after them matches no agent's session, so
+// every member's poll delivers it, the session the user writes from included.
+async function postAsHuman($: Engine, room: string, text: string, answers?: string) {
   const body = text.trim();
   if (!body) return;
   const ts = await $.clock.now();
+  const human = await humanName($);
   await write($, room, {
     type: "message",
     id: newId(ts),
     text: body,
     ...(answers ? { answers } : {}),
     ts,
-    project: "dylan",
-    session: "dylan",
+    project: human,
+    session: human,
   });
   $.ui.invalidate("ui.render");
 }
@@ -187,17 +193,14 @@ async function acceptInvites(
 function toastFor(
   room: string,
   project: string,
+  human: string,
   fresh: readonly MessageEvent[],
 ) {
   const addressed = fresh
     .filter((m) => m.to?.includes(project))
     .map((m) => `${m.project} → you`);
-  const forDylan = fresh.some(
-    (m) => m.kind === "ask" && m.to?.includes("dylan"),
-  )
-    ? ["ask for Dylan"]
-    : [];
-  const notes = [...new Set([...addressed, ...forDylan])];
+  const forHuman = fresh.some((m) => m.kind === "ask" && m.to?.includes(human)) ? [`ask for ${human}`] : [];
+  const notes = [...new Set([...addressed, ...forHuman])];
   return `izumo #${room}: ${fresh.length} new${notes.length ? ` (${notes.join(", ")})` : ""}`;
 }
 
@@ -242,7 +245,7 @@ async function poll($: Engine) {
     for (const m of fresh) await say($, formatMessage(room, m));
     const targets = wakeTargets(project, state, fresh, mine);
     if (targets.length > 0) toWake.push({ room, messages: targets });
-    if (fresh.length > 0) $.ui.toast(toastFor(room, project, fresh));
+    if (fresh.length > 0) $.ui.toast(toastFor(room, project, await humanName($), fresh));
     const closed = read.events.find((e) => e.type === "close");
     if (closed)
       await say($, `[#${room}] #${room} was closed by ${closed.project}.`);
@@ -460,7 +463,7 @@ async function roomClose($: Engine, input: ToolInput): Promise<Answer> {
   if ("error" in found) return { result: found.error!, isError: true };
   if (found.state.owner !== (await me($)))
     return {
-      result: `Only #${found.room}'s owner (${found.state.owner}) or Dylan can close it.`,
+      result: `Only #${found.room}'s owner (${found.state.owner}) or the user can close it.`,
       isError: true,
     };
   await write($, found.room, { type: "close", ...(await stamp($)) });
@@ -487,7 +490,7 @@ async function command($: Engine, args: string) {
         await write($, room, { type: "leave", ...(await stamp($)) });
       return `Left #${room}`;
     case "close":
-      // the person typed it, so no owner check: Dylan can retire any room
+      // the person typed it, so no owner check: the user can retire any room
       if (!state.isClosed)
         await write($, room, { type: "close", ...(await stamp($)) });
       return `Closed #${room}`;
@@ -512,10 +515,11 @@ const PROJECTS = {
 
 export const register: Register = (on) => {
   on("session.start", async ($, e, next) => {
+    const human = await humanName($);
     await $.tool.register({
       name: "RoomCreate",
       description:
-        "Create an izumo room shared with agents in Dylan's other projects, and invite projects to it. The room defaults to this project's name; an open room with that name is reused.",
+        "Create an izumo room shared with agents in the user's other projects, and invite projects to it. The room defaults to this project's name; an open room with that name is reused.",
       inputSchema: {
         type: "object",
         properties: {
@@ -550,7 +554,7 @@ export const register: Register = (on) => {
           text: { type: "string", description: "The message" },
           to: {
             ...PROJECTS,
-            description: 'Projects (or "dylan") this is addressed to',
+            description: `Projects (or "${human}", the user) this is addressed to`,
           },
           kind: {
             type: "string",
@@ -647,6 +651,7 @@ export const register: Register = (on) => {
         owner: state.owner,
         openAsks: state.openAsks.length,
       })),
+      await humanName($),
     );
     if (text === undefined) return composed;
     return {
@@ -669,6 +674,7 @@ export const register: Register = (on) => {
     if (state === undefined) return <Text dimColor>No room #{room}.</Text>;
 
     const now = await $.clock.now();
+    const human = await humanName($);
     const askIds = new Set(state.openAsks.map((m) => m.id));
     const recent = state.messages.filter((m) => !askIds.has(m.id)).slice(-PANE_RECENT);
     const canWrite = !state.isClosed && Input !== undefined;
@@ -693,15 +699,15 @@ export const register: Register = (on) => {
             </Text>
             {state.openAsks.map((m, n) => (
               <Box flexDirection="column" marginTop={1}>
-                {messageCard(elements, m, now)}
+                {messageCard(elements, m, now, human)}
                 {canWrite && Input && (
                   <Box paddingLeft={2}>
                     <Input
                       key={`answer-${m.id}`}
                       autoFocus={n === 0 ? true : undefined}
-                      placeholder="Answer as Dylan"
+                      placeholder={`Answer as ${human}`}
                       submitLabel="answer"
-                      onSubmit={(value: string) => void postAsDylan($, room, value, m.id)}
+                      onSubmit={(value: string) => void postAsHuman($, room, value, m.id)}
                     />
                   </Box>
                 )}
@@ -716,7 +722,7 @@ export const register: Register = (on) => {
         {recent.length === 0 && <Text dimColor>No messages yet.</Text>}
         {recent.map((m) => (
           <Box flexDirection="column" marginTop={1}>
-            {messageCard(elements, m, now)}
+            {messageCard(elements, m, now, human)}
           </Box>
         ))}
 
@@ -726,9 +732,9 @@ export const register: Register = (on) => {
             <Input
               key="say"
               autoFocus={state.openAsks.length === 0 ? true : undefined}
-              placeholder="Say as Dylan"
+              placeholder={`Say as ${human}`}
               submitLabel="send"
-              onSubmit={(value: string) => void postAsDylan($, room, value)}
+              onSubmit={(value: string) => void postAsHuman($, room, value)}
             />
           </Box>
         )}
