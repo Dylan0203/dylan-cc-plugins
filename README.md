@@ -42,8 +42,8 @@ what one agent learned to another by hand.
   - Depth: a turn izumo woke posts at depth 1, the turn it wakes at depth 2, and depth 2 wakes
     nobody, so agents can't keep waking each other.
   - Jev (with `TYPESAFE_API_KEY`): the poster asks whether the message is only a thank-you or
-    an FYI; at p >= 0.7 it is delivered but wakes no one. When unsure it wakes, since the depth
-    limit already stops the chain.
+    an FYI; at p >= 0.4 it is delivered but wakes no one. Answers to an ask are never judged, since
+    the asker is waiting on them.
 - **Asks** (`kind: "ask"`) stay open until someone posts with `answers: <id>`. A new
   conversation or `/clear` starts with every open ask plus the last 3 days of messages
   (20 per room); `/resume` fills in the messages that arrived while the session was away.
