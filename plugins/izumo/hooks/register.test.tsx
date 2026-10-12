@@ -80,15 +80,17 @@ const fakeHost = (on: On) => {
     return { value: text } as never;
   });
   // the plugin appends with `sh -c 'cat >> "$1"' sh <path>`, the line on stdin; mkdir is a no-op here
+  // and reads the transcript's end with `tail -c <n> <path>`
   on("process.run", (_$, e) => {
     if (e.argv[0] === "sh") {
       const path = e.argv.at(-1)!;
       files.set(path, (files.get(path) ?? "") + (e.init?.stdin ?? ""));
     }
+    const tailed = e.argv[0] === "tail" ? files.get(e.argv.at(-1)!) : "";
     return {
       value: {
-        exitCode: 0,
-        stdout: "",
+        exitCode: tailed === undefined ? 1 : 0,
+        stdout: tailed ?? "",
         stderr: "",
         isStdoutTruncated: false,
         isStderrTruncated: false,
@@ -135,6 +137,7 @@ const fakeHost = (on: On) => {
       }) as never,
   );
   on("classic.SessionStart", () => ({}) as never);
+  on("classic.UserPromptSubmit", () => ({}) as never);
 
   const write = (room: string, event: RoomEvent) =>
     files.set(file(room), (files.get(file(room)) ?? "") + toLine(event));
@@ -1079,5 +1082,94 @@ describe("叫醒", () => {
     expect(Object.keys(host.jev.calls[0]?.questions ?? {})).not.toContain(
       "fyi",
     );
+  });
+});
+
+const TRANSCRIPT = "/home/dylan/.claude/projects/-work-skid/s-me.jsonl";
+const record = (r: Record<string, unknown>) => `${JSON.stringify(r)}\n`;
+const typedPrompt = async ($: Engine, text = "Dylan types something", kind = "composer") => {
+  await $.classic.UserPromptSubmit({ prompt: text, transcript_path: TRANSCRIPT } as never);
+  await $.prompt.submit({ text, wait: false, origin: { kind } } as never);
+};
+
+describe("/izumo:brief", () => {
+  test("Brief 讀 transcript 的尾端和所有 room，給出摘要", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.say("payments", "幣別用哪個？", { id: "q1", kind: "ask", to: ["dylan"] });
+    host.files.set(
+      TRANSCRIPT,
+      [
+        record({ type: "user", origin: { kind: "human" }, timestamp: "2026-10-12T08:00:00Z", message: { content: "做，go" } }),
+        record({ type: "user", origin: { kind: "human" }, timestamp: "2026-10-12T08:05:00Z", message: { content: "<command-name>/izumo:brief</command-name>" } }),
+      ].join(""),
+    );
+    await boot($);
+    await typedPrompt($, "/izumo:brief");
+    const result = await tool($, "Brief", {});
+    expect(String(result.result)).toContain("LAST_PROMPT 做，go");
+    expect(String(result.result)).toContain("#payments ask q1 · kolnet");
+    expect(result.isError).toBeFalsy();
+  });
+
+  test("還不知道 transcript 在哪時，只給 room 的部分並明講", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    await boot($);
+    const result = String((await tool($, "Brief", {})).result);
+    expect(result).toMatch(/^WINDOW_TRUNCATED/m);
+    expect(result).toContain("=== OPEN ASKS FOR dylan ===");
+  });
+
+  test("RoomAnswer 以使用者的身份回答，ask 馬上結案，不用是成員", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments", ["kolnet"]);
+    host.say("payments", "幣別用哪個？", { id: "q1", kind: "ask", to: ["dylan"] });
+    await boot($);
+    await typedPrompt($);
+    const result = await tool($, "RoomAnswer", { room: "payments", answers: "q1", text: "用 TWD" });
+    expect(String(result.result)).toMatch(/Answered ask q1 in #payments as dylan/);
+    expect(host.events("payments").at(-1)).toEqual(
+      expect.objectContaining({ type: "message", project: "dylan", session: "dylan", answers: "q1", text: "用 TWD" }),
+    );
+    expect(host.state("payments").openAsks).toEqual([]);
+  });
+
+  test("RoomAnswer 只回答還開著的 ask", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.say("payments", "幣別用哪個？", { id: "q1", kind: "ask", to: ["dylan"] });
+    host.say("payments", "好", { id: "a1", answers: "q1", project: "dylan", session: "dylan" });
+    await boot($);
+    await typedPrompt($);
+    for (const [room, answers] of [["payments", "q1"], ["payments", "nope"], ["nowhere", "q1"]]) {
+      const result = await tool($, "RoomAnswer", { room, answers, text: "x" });
+      expect(result.isError).toBe(true);
+    }
+    expect(host.events("payments").filter((e) => e.type === "message")).toHaveLength(2);
+  });
+
+  test("RoomAnswer 在使用者沒有發起的那一輪會被拒絕", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.say("payments", "幣別用哪個？", { id: "q1", kind: "ask", to: ["dylan"] });
+    await boot($);
+    const answer = () => tool($, "RoomAnswer", { room: "payments", answers: "q1", text: "用 TWD" });
+
+    expect((await answer()).isError).toBe(true);
+    for (const kind of ["peer", "task-notification", "scheduled-trigger"]) {
+      await $.prompt.submit({ text: "x", wait: false, origin: { kind } } as never);
+      expect((await answer()).isError).toBe(true);
+    }
+    // a turn izumo woke: the user typed earlier, then a message addressed to skid arrived
+    await typedPrompt($);
+    host.say("payments", "skid 請看", { id: "w", to: ["skid"] });
+    await host.clock.advance(5000);
+    expect(await eventually(() => host.submitted.length > 0)).toBe(true);
+    expect(String((await answer()).result)).toMatch(/only in a turn the user started/);
+    expect(host.state("payments").openAsks).toHaveLength(1);
+
+    await typedPrompt($, "從手機打的", "bridge");
+    expect((await answer()).isError).toBeFalsy();
   });
 });

@@ -22,6 +22,7 @@ import {
   type RoomEvent,
   type RoomState,
 } from "./rooms";
+import { briefDigest, parseTranscript } from "./brief";
 import { askJev, buildQuestions, jevVerdicts } from "./jev";
 
 const POLL_MS = 5000;
@@ -41,6 +42,12 @@ let isPolling = false;
 let isTurnRunning = false;
 let isWakeQueued = false;
 let turnDepth = 0;
+// RoomAnswer writes as the user, so only a turn the user started may call it
+let isHumanTurn = false;
+// classic events carry it; a reload forgets it until the next prompt
+let transcriptPath: string | undefined;
+// the transcript outgrows $.fs's 4 MiB, and the brief only needs its recent end
+const TAIL_BYTES = 4_000_000;
 
 async function humanName($: Engine) {
   return humanFrom(await $.env.get("USER"));
@@ -216,6 +223,7 @@ function wake($: Engine, rooms: { room: string; messages: MessageEvent[] }[]) {
     .submit({ text: wakePrompt(rooms) })
     .then(() => {
       turnDepth = depth;
+      isHumanTurn = false;
     })
     .finally(() => {
       isWakeQueued = false;
@@ -458,6 +466,36 @@ async function roomPost($: Engine, input: ToolInput): Promise<Answer> {
   return { result: `Posted to #${found.room}${asAsk}.${judged.note}${applied}` };
 }
 
+async function readTail($: Engine, path: string) {
+  const { exitCode, stdout } = await $.process.run(["tail", "-c", String(TAIL_BYTES), path]);
+  return exitCode === 0 ? stdout : "";
+}
+
+async function brief($: Engine): Promise<Answer> {
+  const records = transcriptPath === undefined ? [] : parseTranscript(await readTail($, transcriptPath));
+  return {
+    result: briefDigest({ records, rooms: await allRooms($), human: await humanName($), now: await $.clock.now() }),
+  };
+}
+
+async function roomAnswer($: Engine, input: ToolInput): Promise<Answer> {
+  if (!isHumanTurn)
+    return {
+      result:
+        "RoomAnswer posts as the user, so it works only in a turn the user started. Ask the user to answer in their own prompt, or in /izumo show <room>.",
+      isError: true,
+    };
+  const room = input.room ?? "";
+  const state = isRoomName(room) ? await loadRoom($, room) : undefined;
+  if (state === undefined) return { result: `No room #${room}.`, isError: true };
+  if (state.isClosed) return { result: `#${room} is closed.`, isError: true };
+  if (!state.openAsks.some((m) => m.id === input.answers))
+    return { result: `#${room} has no open ask ${input.answers}.`, isError: true };
+  if (!input.text?.trim()) return { result: "The answer is empty.", isError: true };
+  await postAsHuman($, room, input.text, input.answers);
+  return { result: `Answered ask ${input.answers} in #${room} as ${await humanName($)}.` };
+}
+
 async function roomClose($: Engine, input: ToolInput): Promise<Answer> {
   const found = await memberRoom($, input.room);
   if ("error" in found) return { result: found.error!, isError: true };
@@ -579,6 +617,25 @@ export const register: Register = (on) => {
         required: ["room"],
       },
     });
+    await $.tool.register({
+      name: "Brief",
+      description:
+        "For /izumo:brief: what the user missed since they last typed in this session (their open asks in every room, new room and peer messages, your replies, open questions). Read-only.",
+      inputSchema: { type: "object", properties: {} },
+    });
+    await $.tool.register({
+      name: "RoomAnswer",
+      description: `Answer an open ask in an izumo room as the user (${human}), which closes it and wakes the asker. Only to relay a choice the user just made in this conversation, such as an AskUserQuestion pick; refused in any turn the user didn't start. You don't need to be in the room.`,
+      inputSchema: {
+        type: "object",
+        properties: {
+          room: ROOM_PROP,
+          answers: { type: "string", description: "The id of the open ask" },
+          text: { type: "string", description: "The user's decision, in their words where you have them" },
+        },
+        required: ["room", "answers", "text"],
+      },
+    });
     await $.command.register({
       name: "izumo",
       description: "Rooms shared with agents in other projects",
@@ -597,6 +654,7 @@ export const register: Register = (on) => {
   });
 
   on("classic.SessionStart", async ($, e, next) => {
+    transcriptPath = e.transcript_path ?? transcriptPath;
     const answered = await next(e);
     if (e.source === "resume")
       await fillGap($, e.seconds_since_last_response ?? 0).catch((err: unknown) =>
@@ -609,6 +667,12 @@ export const register: Register = (on) => {
     // anyone else's prompt (the person, the SDK, another plugin) starts a chain afresh;
     // izumo's own wake never arrives here and sets its depth in wake()
     turnDepth = 0;
+    isHumanTurn = e.origin?.kind === "composer" || e.origin?.kind === "bridge";
+    return next(e);
+  });
+
+  on("classic.UserPromptSubmit", ($, e, next) => {
+    transcriptPath = e.transcript_path ?? transcriptPath;
     return next(e);
   });
 
@@ -641,6 +705,13 @@ export const register: Register = (on) => {
   ).catch(() => failed);
   on("tool.call", { tool: "mcp__izumo__RoomClose" }, async ($, e) =>
     roomClose($, e as unknown as ToolInput),
+  ).catch(() => failed);
+  on("tool.call", { tool: "mcp__izumo__Brief" }, async ($) => brief($)).catch(() => ({
+    result: "izumo: couldn't read the transcript or the rooms; brief from your own context.",
+    isError: true as const,
+  }));
+  on("tool.call", { tool: "mcp__izumo__RoomAnswer" }, async ($, e) =>
+    roomAnswer($, e as unknown as ToolInput),
   ).catch(() => failed);
 
   on("prompt.compose", async ($, e, next) => {
