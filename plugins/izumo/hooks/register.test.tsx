@@ -825,12 +825,23 @@ const markdownTexts = (node: unknown): string[] => {
   return [...own, ...(children ?? []).flatMap(markdownTexts)];
 };
 
-const pane = (room: string) =>
+// every key in a drawn tree, in document order
+const keysOf = (node: unknown): string[] => {
+  if (typeof node !== "object" || node === null) return [];
+  const { props, children } = node as {
+    props?: { key?: string };
+    children?: unknown[];
+  };
+  const own = typeof props?.key === "string" ? [props.key] : [];
+  return [...own, ...(children ?? []).flatMap(keysOf)];
+};
+
+const pane = () =>
   ({
     component: "Pane",
-    requestId: `izumo-${room}`,
+    requestId: "izumo",
     props: {
-      title: `#${room}`,
+      title: "izumo",
       isFocused: false,
       bodyColumns: 80,
       placement: "dock",
@@ -840,14 +851,62 @@ const pane = (room: string) =>
   }) as const;
 
 describe("/izumo show", () => {
-  test("開一個以 room 命名的 pane", async ($, on) => {
+  test("所有 room 共用一個 pane，show <room> 選中那個 room", async ($, on) => {
     const host = await start($, on);
     host.seedRoom("payments");
+    host.seedRoom("deploy");
     await boot($);
-    expect(await izumo($, "show payments")).toContain("#payments");
+    expect(await izumo($, "show deploy")).toContain("#deploy");
     // the person asked for it to work in it, so it takes the keyboard
-    expect(host.opened).toEqual(["izumo-payments (focus)"]);
+    expect(host.opened).toEqual(["izumo (focus)"]);
+    const ui = await $.ui.mount({ plugin: "izumo", surface: "terminal", ...pane() });
+    expect(await ui.find({ key: "say-deploy" })).toBeDefined();
+    expect(await ui.find({ key: "say-payments" })).toBeUndefined();
+    await ui.unmount();
     expect(await izumo($, "show nowhere")).toMatch(/No room #nowhere/);
+  });
+
+  test("tab 列出加入的 room，照名稱排序，有 open ask 的帶數字，按下去就切換", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.seedRoom("deploy");
+    host.say("payments", "要用 TWD 嗎？", { id: "q1", kind: "ask", to: ["dylan"] });
+    await boot($);
+    const ui = await $.ui.mount({ plugin: "izumo", surface: "terminal", ...pane() });
+    const tabs = () => ui.drawn().then((t) => keysOf(t).filter((k) => k.startsWith("tab-")));
+    expect(await tabs()).toEqual(["tab-deploy", "tab-payments"]);
+    // nothing chosen yet: the room waiting on the user comes first
+    expect((await ui.find({ key: "tab-payments" }))?.props.variant).toBe("primary");
+    expect((await ui.find({ key: "tab-deploy" }))?.props.variant).not.toBe("primary");
+    expect((await ui.find({ type: "Text", text: /^ 1$/ }))?.props.color).toBe("warning");
+    expect(await ui.find({ key: "answer-q1" })).toBeDefined();
+
+    await ui.press({ key: "tab-deploy" });
+    await ui.redraw();
+    expect((await ui.find({ key: "tab-deploy" }))?.props.variant).toBe("primary");
+    expect(await ui.find({ key: "answer-q1" })).toBeUndefined();
+    expect(await ui.find({ key: "say-deploy" })).toBeDefined();
+    await ui.unmount();
+  });
+
+  test("show 不帶 room：沿用上次選的；不是成員的 room 用 show 指定時排在 tab 最後", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.seedRoom("ops", ["kolnet"]);
+    await boot($);
+    expect(await izumo($, "show ops")).toContain("#ops");
+    expect(await izumo($, "show")).toContain("#ops");
+    const ui = await $.ui.mount({ plugin: "izumo", surface: "terminal", ...pane() });
+    expect(keysOf(await ui.drawn()).filter((k) => k.startsWith("tab-"))).toEqual(["tab-payments", "tab-ops"]);
+    expect((await ui.find({ key: "tab-ops" }))?.props.variant).toBe("primary");
+    await ui.unmount();
+  });
+
+  test("沒有任何 room 時 show 不開 pane", async ($, on) => {
+    const host = await start($, on);
+    await boot($);
+    expect(await izumo($, "show")).toMatch(/No rooms yet/);
+    expect(host.opened).toEqual([]);
   });
 
   for (const surface of ["terminal", "desktop"] as const) {
@@ -865,7 +924,7 @@ describe("/izumo show", () => {
       const ui = await $.ui.mount({
         plugin: "izumo",
         surface,
-        ...pane("payments"),
+        ...pane(),
       });
       expect(await ui.find({ text: /^#payments$/ })).toBeDefined();
       expect(
@@ -909,7 +968,7 @@ describe("/izumo show", () => {
         (await ui.find({ type: "Text", text: /re q1/ }))?.props.color,
       ).toBe("success");
 
-      await ui.input({ key: "say", text: "週五上線" });
+      await ui.input({ key: "say-payments", text: "週五上線" });
       expect(host.events("payments").at(-1)).toEqual(
         expect.objectContaining({ project: "dylan", text: "週五上線" }),
       );
@@ -930,7 +989,7 @@ describe("/izumo show", () => {
     const ui = await $.ui.mount({
       plugin: "izumo",
       surface: "terminal",
-      ...pane("payments"),
+      ...pane(),
     });
     expect((await ui.find({ key: "answer-q1" }))?.props.placeholder).toBe(
       "Answer as ada",
@@ -944,7 +1003,7 @@ describe("/izumo show", () => {
       }),
     );
     delete host.env.USER;
-    await ui.input({ key: "say", text: "週五上線" });
+    await ui.input({ key: "say-payments", text: "週五上線" });
     expect(host.events("payments").at(-1)).toEqual(
       expect.objectContaining({ project: "human", text: "週五上線" }),
     );
@@ -958,9 +1017,9 @@ describe("/izumo show", () => {
     const ui = await $.ui.mount({
       plugin: "izumo",
       surface: "terminal",
-      ...pane("payments"),
+      ...pane(),
     });
-    await ui.input({ key: "say", text: "週五上線" });
+    await ui.input({ key: "say-payments", text: "週五上線" });
     await host.clock.advance(5000);
     expect(await eventually(() => host.appended.length > 0)).toBe(true);
     expect(host.appended).toEqual(["[#payments] dylan: 週五上線"]);
@@ -975,11 +1034,11 @@ describe("/izumo show", () => {
     const ui = await $.ui.mount({
       plugin: "izumo",
       surface: "mobile",
-      ...pane("payments"),
+      ...pane(),
     });
     expect(markdownTexts(await ui.drawn())).toEqual(["要用 TWD 嗎？"]);
     expect(await ui.find({ key: "answer-q1" })).toBeUndefined();
-    expect(await ui.find({ key: "say" })).toBeUndefined();
+    expect(await ui.find({ key: "say-payments" })).toBeUndefined();
     await ui.unmount();
   });
 
@@ -993,13 +1052,14 @@ describe("/izumo show", () => {
       session: "s-k",
     });
     await boot($);
+    await izumo($, "show payments");
     const ui = await $.ui.mount({
       plugin: "izumo",
       surface: "terminal",
-      ...pane("payments"),
+      ...pane(),
     });
     expect(await ui.find({ text: /closed/ })).toBeDefined();
-    expect(await ui.find({ key: "say" })).toBeUndefined();
+    expect(await ui.find({ key: "say-payments" })).toBeUndefined();
     await ui.unmount();
   });
 });
@@ -1068,7 +1128,7 @@ describe("叫醒", () => {
     const ui = await $.ui.mount({
       plugin: "izumo",
       surface: "terminal",
-      ...pane("payments"),
+      ...pane(),
     });
     await ui.input({ key: "answer-q1", text: "用 TWD" });
     await ui.unmount();

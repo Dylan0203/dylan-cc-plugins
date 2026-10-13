@@ -74,14 +74,15 @@ describe("isRoomName", () => {
 });
 
 describe("parseCommand", () => {
-  test("log 帶 room 與筆數（預設 30、上限 200），show 帶 room", () => {
+  test("log 帶 room 與筆數（預設 30、上限 200），show 的 room 可省略", () => {
     expect(parseCommand("log payments")).toEqual({ kind: "log", room: "payments", count: 30 });
     expect(parseCommand("log #payments 5")).toEqual({ kind: "log", room: "payments", count: 5 });
     expect(parseCommand("log payments 999")).toEqual({ kind: "log", room: "payments", count: 200 });
     expect(parseCommand("log payments five").kind).toBe("error");
     expect(parseCommand("log payments 0").kind).toBe("error");
     expect(parseCommand("show payments")).toEqual({ kind: "show", room: "payments" });
-    expect(parseCommand("show").kind).toBe("error");
+    expect(parseCommand("show")).toEqual({ kind: "show" });
+    expect(parseCommand("show a b").kind).toBe("error");
   });
 
   test("join / leave / close 帶 room，去掉開頭的 #", () => {

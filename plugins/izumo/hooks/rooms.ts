@@ -38,13 +38,14 @@ export type RoomState = {
 };
 
 export type Command =
-  | { kind: "join" | "leave" | "close" | "show"; room: string }
+  | { kind: "join" | "leave" | "close"; room: string }
+  | { kind: "show"; room?: string }
   | { kind: "log"; room: string; count: number }
   | { kind: "list"; isAll: boolean }
   | { kind: "error"; text: string };
 
 export const USAGE =
-  "Usage: /izumo list [--all] | log <room> [n] | show <room> | join <room> | leave <room> | close <room>";
+  "Usage: /izumo list [--all] | log <room> [n] | show [room] | join <room> | leave <room> | close <room>";
 
 const LOG_DEFAULT = 30;
 const LOG_MAX = 200;
@@ -61,6 +62,7 @@ export const parseCommand = (args: string): Command => {
     .filter(Boolean);
   if (verb === "list" && rest.length === 0 && (raw === undefined || raw === "--all"))
     return { kind: "list", isAll: raw === "--all" };
+  if (verb === "show" && raw === undefined) return { kind: "show" };
   const takesRoom = ["join", "leave", "close", "show", "log"].includes(verb);
   if (!takesRoom || raw === undefined) return { kind: "error", text: USAGE };
   const room = raw.replace(/^#/, "");

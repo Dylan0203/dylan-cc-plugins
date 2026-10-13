@@ -125,7 +125,10 @@ async function stamp($: Engine) {
   };
 }
 
-const PANE = "izumo-";
+const PANE = "izumo";
+// The room the pane shows. Kept here rather than in $.state: a reload forgetting it only
+// sends the pane back to its default room.
+let paneRoom: string | undefined;
 // messages run several lines each, so a fixed count and the pane's own scrolling
 // read better than fitting the viewport row by row
 const PANE_RECENT = 15;
@@ -169,6 +172,107 @@ async function postAsHuman($: Engine, room: string, text: string, answers?: stri
     project: human,
     session: human,
   });
+  $.ui.invalidate("ui.render");
+}
+
+type BodyElements = CardElements & { Input?: Elements["terminal"]["Input"] };
+
+// One room as the pane draws it under its tab. Mobile draws no Input: read-only there.
+function roomBody(
+  $: Engine,
+  elements: BodyElements,
+  room: string,
+  state: RoomState,
+  now: number,
+  human: string,
+  bodyColumns: number,
+) {
+  const { Box, Text, Input } = elements;
+  const askIds = new Set(state.openAsks.map((m) => m.id));
+  const recent = state.messages.filter((m) => !askIds.has(m.id)).slice(-PANE_RECENT);
+  const canWrite = !state.isClosed && Input !== undefined;
+  const meta = [
+    ...(state.isClosed ? ["closed"] : []),
+    `owner ${state.owner ?? "unknown"}`,
+    state.members.join(", ") || "no members",
+  ].join(" · ");
+
+  return (
+    <Box flexDirection="column">
+      <Text bold>#{room}</Text>
+      <Text dimColor>{meta}</Text>
+      <Text dimColor italic>
+        {state.purpose || "no purpose given"}
+      </Text>
+
+      {state.openAsks.length > 0 && (
+        <Box key="asks" flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1} marginTop={1}>
+          <Text bold color="warning">
+            Open asks ({state.openAsks.length})
+          </Text>
+          {state.openAsks.map((m, n) => (
+            <Box flexDirection="column" marginTop={1}>
+              {messageCard(elements, m, now, human)}
+              {canWrite && Input && (
+                <Box paddingLeft={2}>
+                  <Input
+                    key={`answer-${m.id}`}
+                    autoFocus={n === 0 ? true : undefined}
+                    placeholder={`Answer as ${human}`}
+                    submitLabel="answer"
+                    onSubmit={(value: string) => void postAsHuman($, room, value, m.id)}
+                  />
+                </Box>
+              )}
+            </Box>
+          ))}
+        </Box>
+      )}
+
+      <Box marginTop={1}>
+        <Text bold>Recent</Text>
+      </Box>
+      {recent.length === 0 && <Text dimColor>No messages yet.</Text>}
+      {recent.map((m) => (
+        <Box flexDirection="column" marginTop={1}>
+          {messageCard(elements, m, now, human)}
+        </Box>
+      ))}
+
+      {canWrite && Input && (
+        <Box marginTop={1} flexDirection="column">
+          <Text dimColor>{"─".repeat(Math.max(10, Math.min(bodyColumns, 80)))}</Text>
+          <Input
+            key={`say-${room}`}
+            autoFocus={state.openAsks.length === 0 ? true : undefined}
+            placeholder={`Say as ${human}`}
+            submitLabel="send"
+            onSubmit={(value: string) => void postAsHuman($, room, value)}
+          />
+        </Box>
+      )}
+    </Box>
+  );
+}
+
+// The pane's tabs: the open rooms this project is in, by name so they don't move around,
+// then the room `/izumo show` named if it isn't one of them, as it is still worth reading.
+async function paneTabs($: Engine): Promise<Room[]> {
+  const project = await me($);
+  const rooms = (await allRooms($)).sort((a, b) => a.room.localeCompare(b.room));
+  const joined = rooms.filter(({ state }) => !state.isClosed && state.members.includes(project));
+  const named = joined.some((r) => r.room === paneRoom) ? undefined : rooms.find((r) => r.room === paneRoom);
+  return named ? [...joined, named] : joined;
+}
+
+// With no choice made yet, the room waiting on the user comes first.
+const pickRoom = (tabs: readonly Room[], human: string) =>
+  tabs.some((t) => t.room === paneRoom)
+    ? paneRoom
+    : (tabs.find(({ state }) => state.openAsks.some((a) => a.to?.includes(human))) ?? tabs[0])?.room;
+
+function selectRoom($: Engine, room: string) {
+  paneRoom = room;
   $.ui.invalidate("ui.render");
 }
 
@@ -531,6 +635,7 @@ async function command($: Engine, args: string) {
   const command = parseCommand(args);
   if (command.kind === "error") return command.text;
   if (command.kind === "list") return listText($, command.isAll);
+  if (command.kind === "show") return show($, command.room);
   const { room } = command;
   const state = await loadRoom($, room);
   if (state === undefined)
@@ -553,11 +658,22 @@ async function command($: Engine, args: string) {
       return `Closed #${room}`;
     case "log":
       return logText(room, state, command.count);
-    case "show":
-      // the person asked for it to work in it, so it takes the keyboard
-      await $.ui.open({ id: `${PANE}${room}`, title: `#${room}`, focus: true });
-      return `Opened #${room}`;
   }
+}
+
+async function show($: Engine, room: string | undefined) {
+  if (room !== undefined) {
+    if ((await loadRoom($, room)) === undefined)
+      return `No room #${room}. Rooms are created with /izumo:create-room.`;
+    paneRoom = room;
+  }
+  const chosen = pickRoom(await paneTabs($), await humanName($));
+  if (chosen === undefined) return "No rooms yet. Rooms are created with /izumo:create-room.";
+  paneRoom = chosen;
+  // the person asked for it to work in it, so it takes the keyboard
+  await $.ui.open({ id: PANE, title: "izumo", focus: true });
+  $.ui.invalidate("ui.render");
+  return `Opened #${chosen}`;
 }
 
 const ROOM_PROP = {
@@ -769,80 +885,33 @@ export const register: Register = (on) => {
   });
 
   on("ui.render", { component: "Pane" }, async ($, e, next) => {
-    if (!e.requestId.startsWith(PANE)) return next(e);
-    const room = e.requestId.slice(PANE.length);
+    if (e.requestId !== PANE) return next(e);
     const elements = $.ui.resolve(e);
-    const { Box, Text } = elements;
-    // mobile draws no Input: the pane is read-only there
-    const Input = "Input" in elements ? elements.Input : undefined;
-    const state = await loadRoom($, room);
-    if (state === undefined) return <Text dimColor>No room #{room}.</Text>;
-
-    const now = await $.clock.now();
+    const { Box, Text, Button } = elements;
     const human = await humanName($);
-    const askIds = new Set(state.openAsks.map((m) => m.id));
-    const recent = state.messages.filter((m) => !askIds.has(m.id)).slice(-PANE_RECENT);
-    const canWrite = !state.isClosed && Input !== undefined;
-    const meta = [
-      ...(state.isClosed ? ["closed"] : []),
-      `owner ${state.owner ?? "unknown"}`,
-      state.members.join(", ") || "no members",
-    ].join(" · ");
+    const tabs = await paneTabs($);
+    const room = pickRoom(tabs, human);
+    const state = tabs.find((t) => t.room === room)?.state;
+    if (room === undefined || state === undefined) return <Text dimColor>No rooms yet.</Text>;
+    const Input = "Input" in elements ? elements.Input : undefined;
 
     return (
       <Box flexDirection="column">
-        <Text bold>#{room}</Text>
-        <Text dimColor>{meta}</Text>
-        <Text dimColor italic>
-          {state.purpose || "no purpose given"}
-        </Text>
-
-        {state.openAsks.length > 0 && (
-          <Box key="asks" flexDirection="column" borderStyle="round" borderColor="warning" paddingX={1} marginTop={1}>
-            <Text bold color="warning">
-              Open asks ({state.openAsks.length})
-            </Text>
-            {state.openAsks.map((m, n) => (
-              <Box flexDirection="column" marginTop={1}>
-                {messageCard(elements, m, now, human)}
-                {canWrite && Input && (
-                  <Box paddingLeft={2}>
-                    <Input
-                      key={`answer-${m.id}`}
-                      autoFocus={n === 0 ? true : undefined}
-                      placeholder={`Answer as ${human}`}
-                      submitLabel="answer"
-                      onSubmit={(value: string) => void postAsHuman($, room, value, m.id)}
-                    />
-                  </Box>
-                )}
-              </Box>
-            ))}
-          </Box>
-        )}
-
-        <Box marginTop={1}>
-          <Text bold>Recent</Text>
+        <Box flexDirection="row" flexWrap="wrap" columnGap={1}>
+          {tabs.map((t) => (
+            <Button
+              key={`tab-${t.room}`}
+              variant={t.room === room ? "primary" : undefined}
+              onPress={() => selectRoom($, t.room)}
+            >
+              #{t.room}
+              {t.state.openAsks.length > 0 ? <Text color="warning">{` ${t.state.openAsks.length}`}</Text> : null}
+            </Button>
+          ))}
         </Box>
-        {recent.length === 0 && <Text dimColor>No messages yet.</Text>}
-        {recent.map((m) => (
-          <Box flexDirection="column" marginTop={1}>
-            {messageCard(elements, m, now, human)}
-          </Box>
-        ))}
-
-        {canWrite && Input && (
-          <Box marginTop={1} flexDirection="column">
-            <Text dimColor>{"─".repeat(Math.max(10, Math.min(e.props.bodyColumns, 80)))}</Text>
-            <Input
-              key="say"
-              autoFocus={state.openAsks.length === 0 ? true : undefined}
-              placeholder={`Say as ${human}`}
-              submitLabel="send"
-              onSubmit={(value: string) => void postAsHuman($, room, value)}
-            />
-          </Box>
-        )}
+        <Box marginTop={1}>
+          {roomBody($, { ...elements, Input }, room, state, await $.clock.now(), human, e.props.bodyColumns)}
+        </Box>
       </Box>
     );
   });
