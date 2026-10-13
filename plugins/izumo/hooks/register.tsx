@@ -557,7 +557,7 @@ export const register: Register = (on) => {
     await $.tool.register({
       name: "RoomCreate",
       description:
-        "Create an izumo room shared with agents in the user's other projects, and invite projects to it. The room defaults to this project's name; an open room with that name is reused.",
+        "Create an izumo room shared with agents in the user's other projects, and invite projects to it. Only when three or more agents need to talk; between two sessions, message the other directly with SendMessage. The room defaults to this project's name; an open room with that name is reused.",
       inputSchema: {
         type: "object",
         properties: {
@@ -625,7 +625,7 @@ export const register: Register = (on) => {
     });
     await $.tool.register({
       name: "RoomAnswer",
-      description: `Answer an open ask in an izumo room as the user (${human}), which closes it and wakes the asker. Only to relay a choice the user just made in this conversation, such as an AskUserQuestion pick; refused in any turn the user didn't start. You don't need to be in the room.`,
+      description: `Answer an open ask in an izumo room as the user (${human}), which closes it and wakes the asker. Only to relay a choice the user just made in this conversation, such as an AskUserQuestion pick; never to close an ask with another agent's answer or your own (use RoomPost with answers). Refused in any turn the user didn't start. You don't need to be in the room.`,
       inputSchema: {
         type: "object",
         properties: {

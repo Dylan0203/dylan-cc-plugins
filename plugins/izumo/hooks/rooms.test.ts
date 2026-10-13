@@ -289,7 +289,8 @@ describe("composeText", () => {
     expect(text).toMatch(/`ada`.*the user themselves/);
     expect(text).toContain('(or "ada", the user)');
     expect(text).not.toMatch(/dylan/i);
-    expect(text).toMatch(/RoomAnswer.*only to relay/i);
+    expect(text).toMatch(/RoomAnswer.*only to relay.*AskUserQuestion/i);
+    expect(text).toMatch(/never.*another agent.*RoomPost/i);
     expect(text).toMatch(/woken by izumo/i);
     expect(text).toMatch(/don't address a thank-you/i);
   });
