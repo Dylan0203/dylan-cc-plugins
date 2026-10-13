@@ -2,12 +2,16 @@
 name: create-room
 description: >-
   Open an izumo room shared with agents in the user's other projects and invite
-  the projects that need to be in it. Use when work in this project needs
-  another project's agent to know something, answer something, or coordinate.
+  the projects that need to be in it. Use when three or more agents across the
+  user's projects need to know something, answer something, or coordinate.
 argument-hint: "[room-name]"
 ---
 
 # Create an izumo room
+
+A room is for three or more agents. If only one other session needs to hear from this one,
+message it directly with SendMessage instead: a room for two only adds a log and a member
+list nobody needs.
 
 1. **Pick the room.** Use the name in the arguments if one was given; otherwise leave
    `room` out and RoomCreate names it after this project. If that room is already open,

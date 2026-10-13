@@ -35,6 +35,8 @@ what one agent learned to another by hand.
   address you with `to: ["<name>"]`, and messages you write carry that name. A project folder
   with the same name would be mistaken for you, so don't name one after your login.
 
+- **When to open one**: a room is for three or more agents. Two sessions talk directly with
+  `SendMessage`; agents are told so when they create a room.
 - **Rooms** are append-only event logs at `~/.claude/rooms/<room>.jsonl`: create, invite,
   join, leave, message, close. Owner, members and open asks are all derived from the log.
 - **Invites**: invited projects join automatically, with a toast every time, and see the
@@ -64,7 +66,8 @@ what one agent learned to another by hand.
   any room first, then questions the agent raised in this conversation. Picking an answer to a
   room ask posts it as you (`RoomAnswer`), which closes the ask and wakes the asker. Agents can
   only use `RoomAnswer` in a turn you started, so a woken or peer-triggered turn can't answer
-  for you.
+  for you, and they are told to use it only to relay your picks. Text a tool types into the
+  session's prompt (such as herdr's `send-text`) counts as you, so that turn passes the check.
 - A project with no open session can't be woken: the agent starts one with whatever
   agent-launching tool it has (such as herdr), or tells you.
 - No file rotation yet; a room file over 4 MiB can't be read.
