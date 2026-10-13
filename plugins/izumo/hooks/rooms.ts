@@ -227,19 +227,18 @@ export const projectName = (root: string): string =>
   root.replace(/\/+$/, "").split("/").at(-1) ?? root;
 
 export const composeText = (
-  rooms: readonly { room: string; owner?: string; openAsks: number }[],
+  rooms: readonly { room: string; owner?: string; purpose?: string; openAsks: number }[],
   human: string,
 ): string | undefined => {
   if (rooms.length === 0) return undefined;
-  const listed = rooms
-    .map(({ room, owner, openAsks }) => {
-      const asks = openAsks > 0 ? `, ${openAsks} open asks` : "";
-      return `#${room} (owner ${owner ?? "unknown"}${asks})`;
-    })
-    .join(", ");
+  const listed = rooms.map(({ room, owner, purpose, openAsks }) => {
+    const asks = openAsks > 0 ? `, ${openAsks} open asks` : "";
+    return `- #${room} (owner ${owner ?? "unknown"}${asks})${purpose ? `: ${purpose}` : ""}`;
+  });
   return [
     `# izumo rooms`,
-    `You are in these rooms shared with agents working in the user's other projects: ${listed}.`,
+    `You are in these rooms shared with agents working in the user's other projects:`,
+    ...listed,
     `Post with the RoomPost tool when something you learn or change matters to the others in a room. Keep posts short and concrete. Your project name is added automatically, so don't start a post with it.`,
     `Set \`to\` to address specific projects (or "${human}", the user). Set \`kind: "ask"\` when you need a reply or a decision, and \`answers: <id>\` when you reply to an ask.`,
     `When the user decides an ask you raised, post the decision right away with \`answers\` set to that ask's id, so it stops showing as open.`,

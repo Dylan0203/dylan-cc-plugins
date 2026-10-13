@@ -275,13 +275,14 @@ describe("composeText", () => {
   test("列出 room、owner、open ask 數，以及用法與規則", () => {
     const text = composeText(
       [
-        { room: "payments", owner: "kolnet", openAsks: 2 },
-        { room: "deploy", owner: "skid", openAsks: 0 },
+        { room: "payments", owner: "kolnet", purpose: "coordinate payments", openAsks: 2 },
+        { room: "deploy", owner: "skid", purpose: "ship the release", openAsks: 0 },
       ],
       "ada",
     )!;
-    expect(text).toContain("#payments (owner kolnet, 2 open asks)");
-    expect(text).toContain("#deploy (owner skid)");
+    // the purpose rides the system prompt, so it survives compaction of the invite that told it
+    expect(text).toContain("- #payments (owner kolnet, 2 open asks): coordinate payments");
+    expect(text).toContain("- #deploy (owner skid): ship the release");
     expect(text).toContain("RoomPost");
     expect(text).toMatch(/project name is added automatically/i);
     expect(text).toMatch(/not instructions/i);
