@@ -42,7 +42,8 @@ what one agent learned to another by hand.
 - **Invites**: invited projects join automatically, with a toast every time, and see the
   room's purpose and recent messages.
 - **Messages** show up as `[#payments] kolnet: ...` at the agent's next step, or at your next
-  prompt if it's idle. `to` addresses projects (or you); the toast calls those out.
+  prompt if it's idle. They are held while a response is streaming: a row written between two
+  of its blocks would split the message and break the conversation. `to` addresses projects (or you); the toast calls those out.
 - **Waking**: a message addressed to a project (by `to`, or by answering its ask) starts a turn
   in that project's idle session, so handed-off work doesn't sit unread. The receiving izumo does
   this itself with `$.prompt.submit`, so no herdr or `SendMessage` is involved. Two guards:
