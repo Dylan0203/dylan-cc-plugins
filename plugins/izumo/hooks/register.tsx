@@ -448,9 +448,23 @@ async function applyVerdicts(
   return notes.join("");
 }
 
+const isAskIn = (state: RoomState, id: string) =>
+  state.messages.some((m) => m.id === id && m.kind === "ask");
+
+// Ask ids are unique across rooms, so an answer posted to the wrong room would leave the ask
+// open where it lives and strand a reply nobody is waiting for.
+async function misplacedAnswer($: Engine, room: string, id: string) {
+  const home = (await allRooms($)).find(({ state }) => isAskIn(state, id));
+  return home
+    ? `Ask ${id} is in #${home.room}, not #${room}; post the answer there.`
+    : `No ask ${id} in #${room}.`;
+}
+
 async function roomPost($: Engine, input: ToolInput): Promise<Answer> {
   const found = await memberRoom($, input.room);
   if ("error" in found) return { result: found.error!, isError: true };
+  if (input.answers && !isAskIn(found.state, input.answers))
+    return { result: await misplacedAnswer($, found.room, input.answers), isError: true };
   const at = await stamp($);
   const drafted: MessageEvent = {
     type: "message",
@@ -739,6 +753,7 @@ export const register: Register = (on) => {
       (await myRooms($)).map(({ room, state }) => ({
         room,
         owner: state.owner,
+        purpose: state.purpose,
         openAsks: state.openAsks.length,
       })),
       await humanName($),

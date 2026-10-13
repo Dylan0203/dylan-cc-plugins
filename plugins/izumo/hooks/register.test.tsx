@@ -316,6 +316,36 @@ describe("RoomPost", () => {
       false,
     );
   });
+
+  test("answers 的 ask 不在這個 room 時拒絕，並指出它在哪個 room", async ($, on) => {
+    const host = await start($, on);
+    host.seedRoom("payments");
+    host.seedRoom("deploy");
+    host.say("payments", "幣別？", { id: "q1", kind: "ask", to: ["skid"] });
+    await boot($);
+    const wrong = await tool($, "RoomPost", {
+      room: "deploy",
+      text: "TWD",
+      answers: "q1",
+    });
+    expect(wrong.isError).toBe(true);
+    expect(String(wrong.result)).toContain("#payments");
+    const unknown = await tool($, "RoomPost", {
+      room: "deploy",
+      text: "TWD",
+      answers: "nope",
+    });
+    expect(unknown.isError).toBe(true);
+    expect(host.events("deploy").some((e) => e.type === "message")).toBe(false);
+
+    const right = await tool($, "RoomPost", {
+      room: "payments",
+      text: "TWD",
+      answers: "q1",
+    });
+    expect(right.isError).not.toBe(true);
+    expect(host.state("payments").openAsks).toEqual([]);
+  });
 });
 
 describe("RoomPost 與 Jev", () => {
