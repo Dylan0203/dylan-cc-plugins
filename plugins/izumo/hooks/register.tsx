@@ -40,6 +40,11 @@ const cursors = new Map<string, { offset: number; size: number }>();
 // clock.every does not wait for an async callback, so a slow poll would overlap the next tick
 let isPolling = false;
 let isTurnRunning = false;
+// The engine writes a response's blocks as rows while it streams, and a row appended between
+// two of them (a server_tool_use and its result) splits the message: every later request is
+// then refused with a 400. A poll that began just before a step still lands first, as a
+// step's first block takes far longer to arrive than an append.
+let isStepStreaming = false;
 let isWakeQueued = false;
 let turnDepth = 0;
 // RoomAnswer writes as the user, so only a turn the user started may call it
@@ -644,7 +649,7 @@ export const register: Register = (on) => {
     await skipToEnd($);
     await acceptInvites($, await allRooms($), false);
     $.clock.every(POLL_MS, () => {
-      if (isPolling) return;
+      if (isPolling || isStepStreaming) return;
       isPolling = true;
       void poll($).finally(() => {
         isPolling = false;
@@ -682,8 +687,22 @@ export const register: Register = (on) => {
   });
 
   on("turn.complete", ($, e, next) => {
-    if (e.agentId === undefined) isTurnRunning = false;
+    if (e.agentId === undefined) {
+      isTurnRunning = false;
+      isStepStreaming = false;
+    }
     return next(e);
+  });
+
+  // a subagent's response streams into its own transcript, not this conversation
+  on("turn.step", async function* ($, e, next) {
+    if (e.agentId !== undefined) return yield* next(e);
+    isStepStreaming = true;
+    try {
+      return yield* next(e);
+    } finally {
+      isStepStreaming = false;
+    }
   });
 
   on("command.run", { command: "izumo" }, async ($, e) => ({

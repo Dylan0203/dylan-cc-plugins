@@ -618,6 +618,38 @@ describe("投遞", () => {
     expect(host.toasts.join("\n")).toMatch(/ask for ada/);
   });
 
+  test("模型回應還在 stream 時不插入，回應結束後下一個 tick 才投遞", async ($, on) => {
+    // the engine writes each block of a response as its own row; a row appended between a
+    // server_tool_use and its result splits the message, and every later request gets a 400
+    let release = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    on("turn.step", async function* () {
+      await gate;
+      return { turnId: "t1", index: 0, answer: "", toolUses: [], stopReason: "end_turn", usage: null } as never;
+    });
+    const host = await start($, on);
+    host.seedRoom("payments");
+    await boot($);
+    const step = (async () => {
+      for await (const _ of $.turn.step({
+        turnId: "t1",
+        index: 0,
+        model: "claude-opus-5-5",
+        messageCount: 1,
+      })) void _;
+    })();
+    host.say("payments", "mid-stream");
+    await host.clock.advance(5000);
+    await settle();
+    expect(host.appended).toEqual([]);
+
+    release();
+    await step;
+    await host.clock.advance(5000);
+    expect(await eventually(() => host.appended.length > 0)).toBe(true);
+    expect(host.appended).toEqual(["[#payments] kolnet: mid-stream"]);
+  });
+
   test("room 被關閉時成員會收到通知", async ($, on) => {
     const host = await start($, on);
     host.seedRoom("payments");
