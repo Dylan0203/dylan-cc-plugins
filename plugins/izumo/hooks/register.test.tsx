@@ -1022,7 +1022,7 @@ describe("/izumo show", () => {
     await ui.input({ key: "say-payments", text: "週五上線" });
     await host.clock.advance(5000);
     expect(await eventually(() => host.appended.length > 0)).toBe(true);
-    expect(host.appended).toEqual(["[#payments] dylan: 週五上線"]);
+    expect(host.appended).toEqual(["[#payments] dylan → kolnet: 週五上線"]);
     await ui.unmount();
   });
 
@@ -1132,6 +1132,33 @@ describe("叫醒", () => {
     });
     await ui.input({ key: "answer-q1", text: "用 TWD" });
     await ui.unmount();
+    await host.clock.advance(5000);
+    expect(await eventually(() => host.submitted.length > 0)).toBe(true);
+    expect(host.submitted[0]).toContain("from dylan");
+  });
+
+  test("Dylan 在 pane 發言沒指名時是對 room owner 說的，會叫醒 owner", async ($, on) => {
+    const host = await start($, on);
+    host.write("payments", {
+      type: "create",
+      purpose: "ship",
+      ts: 1,
+      project: "skid",
+      session: "s-old",
+    });
+    for (const project of ["skid", "kolnet"])
+      host.write("payments", { type: "join", ts: 1, project, session: `s-${project}` });
+    await boot($);
+    const ui = await $.ui.mount({
+      plugin: "izumo",
+      surface: "terminal",
+      ...pane(),
+    });
+    await ui.input({ key: "say-payments", text: "round 18 go" });
+    await ui.unmount();
+    expect(host.events("payments").at(-1)).toEqual(
+      expect.objectContaining({ project: "dylan", to: ["skid"] }),
+    );
     await host.clock.advance(5000);
     expect(await eventually(() => host.submitted.length > 0)).toBe(true);
     expect(host.submitted[0]).toContain("from dylan");

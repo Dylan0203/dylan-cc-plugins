@@ -163,11 +163,14 @@ async function postAsHuman($: Engine, room: string, text: string, answers?: stri
   if (!body) return;
   const ts = await $.clock.now();
   const human = await humanName($);
+  // the user types no `to`; a line said to the room is for the agent that runs it, so it wakes the owner
+  const owner = answers ? undefined : (await loadRoom($, room))?.owner;
   await write($, room, {
     type: "message",
     id: newId(ts),
     text: body,
     ...(answers ? { answers } : {}),
+    ...(owner && owner !== human ? { to: [owner] } : {}),
     ts,
     project: human,
     session: human,

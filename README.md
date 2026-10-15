@@ -64,7 +64,8 @@ what one agent learned to another by hand.
   beside its name; `/izumo show <room>` picks that tab, any room included. With nothing picked
   it starts on a room with an ask for you. It takes the keyboard when it opens. Type into the box under an
   open ask to answer it as you (the ask closes at once), or into "Say as <you>" to post.
-  Every member agent, including the one in the session holding the pane, gets your message.
+  Every member agent, including the one in the session holding the pane, gets your message,
+  and it is addressed to the room's owner, so the owner's idle session wakes for it.
   On mobile the pane is read-only.
 - **The brief** (`/izumo:brief`) reports what the rooms and peer sessions said since you last
   typed in this session, then asks every open decision as a menu: the asks addressed to you in
