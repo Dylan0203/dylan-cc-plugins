@@ -62,7 +62,14 @@ const msg = (
 const digest = (
   records: TranscriptRecord[],
   rooms = [] as { room: string; state: ReturnType<typeof foldRoom> }[],
-) => briefDigest({ records, rooms, human: "dylan", now: T0 + 60 * MINUTE });
+) =>
+  briefDigest({
+    records,
+    rooms,
+    human: "dylan",
+    project: "skid",
+    now: T0 + 60 * MINUTE,
+  });
 
 describe("parseTranscript", () => {
   test("tail 開頭被切斷的那一行與壞掉的行都略過", () => {
@@ -217,6 +224,7 @@ describe("briefDigest", () => {
         project: "kolnet",
         session: "s-k",
       },
+      { type: "join", ts: T0 - MINUTE, project: "skid", session: "s-s" },
       msg({ id: "old", text: "before", ts: T0 - MINUTE }),
       msg({ id: "new", text: "after", ts: T0 + 10 * MINUTE }),
       msg({
@@ -243,6 +251,30 @@ describe("briefDigest", () => {
     expect(since).not.toContain("before");
     expect(since).not.toContain("我說的");
     expect(since).not.toContain("決定？");
+  });
+
+  test("room 新訊息只列這個專案加入的 room；給使用者的 ask 不限 room", () => {
+    const other = room([
+      {
+        type: "create",
+        purpose: "erp",
+        ts: T0,
+        project: "kolnet",
+        session: "s-k",
+      },
+      { type: "join", ts: T0, project: "kolnet", session: "s-k" },
+      msg({ id: "chat", text: "ERP 連不上", ts: T0 + 10 * MINUTE }),
+      msg({
+        id: "q1",
+        text: "76C 要 deploy 嗎？",
+        kind: "ask",
+        to: ["dylan"],
+        ts: T0 + 11 * MINUTE,
+      }),
+    ]);
+    const text = digest([typed("go", 0)], [{ room: "erp", state: other }]);
+    expect(text).toContain("#erp ask q1 · kolnet");
+    expect(text).not.toContain("ERP 連不上");
   });
 
   test("peer 訊息列出，subagent 的回報不算", () => {

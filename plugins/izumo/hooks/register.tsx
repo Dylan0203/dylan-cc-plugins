@@ -600,7 +600,13 @@ async function readTail($: Engine, path: string) {
 async function brief($: Engine): Promise<Answer> {
   const records = transcriptPath === undefined ? [] : parseTranscript(await readTail($, transcriptPath));
   return {
-    result: briefDigest({ records, rooms: await allRooms($), human: await humanName($), now: await $.clock.now() }),
+    result: briefDigest({
+      records,
+      rooms: await allRooms($),
+      human: await humanName($),
+      project: await me($),
+      now: await $.clock.now(),
+    }),
   };
 }
 

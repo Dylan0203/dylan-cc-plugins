@@ -78,10 +78,12 @@ type Input = {
   records: readonly TranscriptRecord[];
   rooms: readonly { room: string; state: RoomState }[];
   human: string;
+  // this session's project: other rooms' chatter isn't this session's business
+  project: string;
   now: number;
 };
 
-export const briefDigest = ({ records, rooms, human, now }: Input): string => {
+export const briefDigest = ({ records, rooms, human, project, now }: Input): string => {
   const prompts = records.flatMap((r, i) => (isHumanPrompt(r) ? [i] : []));
   const last = prompts.at(-1);
   const lastRecord = last === undefined ? undefined : records[last];
@@ -117,7 +119,8 @@ export const briefDigest = ({ records, rooms, human, now }: Input): string => {
     "",
     `=== ROOM MESSAGES SINCE ${lastRecord ? lastRecord.timestamp : "the last 3 days"} ===`,
   );
-  const fresh = open.flatMap(({ room, state }) =>
+  const joined = open.filter(({ state }) => state.members.includes(project));
+  const fresh = joined.flatMap(({ room, state }) =>
     state.messages
       .filter(
         (m: MessageEvent) =>
