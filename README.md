@@ -67,8 +67,8 @@ what one agent learned to another by hand.
   Every member agent, including the one in the session holding the pane, gets your message,
   and it is addressed to the room's owner, so the owner's idle session wakes for it.
   On mobile the pane is read-only.
-- **The brief** (`/izumo:brief`) reports what the rooms and peer sessions said since you last
-  typed in this session, then asks every open decision as a menu: the asks addressed to you in
+- **The brief** (`/izumo:brief`) reports what the session's rooms and its peer sessions said
+  since you last typed in it, then asks every open decision as a menu: the asks addressed to you in
   any room first, then questions the agent raised in this conversation. Picking an answer to a
   room ask posts it as you (`RoomAnswer`), which closes the ask and wakes the asker. Agents can
   only use `RoomAnswer` in a turn you started, so a woken or peer-triggered turn can't answer

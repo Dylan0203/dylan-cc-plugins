@@ -30,7 +30,7 @@ Call the izumo **Brief** tool. It returns, from this session's transcript and ev
   context for what came before.
 - `OPEN ASKS FOR <user>`: every ask addressed to the user that is still open, in any open
   room, with room, ask id, who asked and how long it has waited.
-- `ROOM MESSAGES SINCE`: what every open room said since that prompt.
+- `ROOM MESSAGES SINCE`: what the open rooms this project is in said since that prompt.
 - `PEER MESSAGES SINCE`: messages other Claude sessions sent this one (subagent hand-backs
   excluded).
 - `MY REPLIES SINCE`: what you said after that prompt.
